@@ -2,9 +2,10 @@ name: Daily NBA FanDuel Bot
 
 on:
   schedule:
-    # Runs automatically every day at 15:00 UTC (10:00 AM EST / 9:00 AM CST)
-    - cron: '0 15 * * *'
-  workflow_dispatch: # Allows you to run it manually anytime you want from GitHub!
+    # Runs automatically every day at 23:30 UTC (5:30 PM CST)
+    # Stays active for 6 hours (until 11:30 PM CST) to scan pre-game lines and auto-grade finals
+    - cron: '30 23 * * *'
+  workflow_dispatch: # Allows you to run it manually anytime from GitHub!
 
 jobs:
   run-bot:

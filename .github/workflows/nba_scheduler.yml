@@ -1,0 +1,29 @@
+name: Daily NBA FanDuel Bot
+
+on:
+  schedule:
+    # Runs automatically every day at 15:00 UTC (10:00 AM EST / 9:00 AM CST)
+    - cron: '0 15 * * *'
+  workflow_dispatch: # Allows you to run it manually anytime you want from GitHub!
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install pandas numpy scipy requests pytz
+
+      - name: Run NBA FanDuel Bot
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          python Bot.py

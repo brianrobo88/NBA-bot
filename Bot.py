@@ -10,7 +10,10 @@ import pytz
 # ==========================================
 # 1. CREDENTIALS & 4.0% MINIMUM EV FILTER
 # ==========================================
-DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1565139751810629673/OP5KjHw2InKG1EBpdrjjYlpF0XLnM92UqokmY-x_8_d97QVKHScQZp2ynKnOOTPPWhcE"
+DISCORD_WEBHOOK_URL = os.getenv(
+    "DISCORD_WEBHOOK_URL",
+    "https://discord.com/api/webhooks/1565139751810629673/OP5KjHw2InKG1EBpdrjjYlpF0XLnM92UqokmY-x_8_d97QVKHScQZp2ynKnOOTPPWhcE"
+)
 THE_ODDS_API_KEY = "9ecb23956a7654b951782fd28ec3a8b5"
 
 # Market Toggles
@@ -19,7 +22,7 @@ SCAN_HALVES_QUARTERS = True   # 1st Half & 1st Quarter
 SCAN_PLAYER_PROPS = True      # Player Points, Rebounds, Assists
 
 MAX_DEEP_SCAN_GAMES_PER_RUN = 3
-MIN_EDGE_TO_POST = 0.040      # STRICT 4.0% OR BETTER EV FILTER
+MIN_EDGE_TO_POST = 0.040      # STRICT 4.0% OR BETTER +EV FILTER
 
 TRACKER_FILE = "tracked_all_markets.json"
 SCANNED_EVENTS_FILE = "scanned_prop_events.json"
@@ -111,7 +114,7 @@ def get_player_baselines():
         "Devin Booker": {"PTS": 27.8, "REB": 4.6, "AST": 6.9},
         "James Harden": {"PTS": 21.4, "REB": 5.8, "AST": 8.9},
         "Giannis Antetokounmpo": {"PTS": 30.8, "REB": 11.6, "AST": 6.1},
-        "Damian Lillard": {"PTS": 25.1, "REB": 4.4, "AST": 7.1},
+        "Damian Lillard": {"PTS": 20.4, "REB": 3.8, "AST": 4.9},
         "Trae Young": {"PTS": 26.2, "REB": 3.1, "AST": 11.2},
         "Cade Cunningham": {"PTS": 24.6, "REB": 6.4, "AST": 9.1},
         "Donovan Mitchell": {"PTS": 27.2, "REB": 4.4, "AST": 5.2},
@@ -166,6 +169,7 @@ def scan_all_fanduel_markets():
     
     central_tz = pytz.timezone("America/Chicago")
     now_utc = datetime.now(timezone.utc)
+    today_ct_str = now_utc.astimezone(central_tz).strftime("%Y-%m-%d")
     
     url = "https://api.the-odds-api.com/v4/sports/basketball_nba/odds"
     params = {
@@ -177,7 +181,7 @@ def scan_all_fanduel_markets():
     }
     
     res = requests.get(url, params=params, timeout=10)
-    print(f"📊 FanDuel Bulk Sync! (Credits Remaining: {res.headers.get('x-requests-remaining')})")
+    print(f"📊 FanDuel Sync for {today_ct_str}! (Credits Remaining: {res.headers.get('x-requests-remaining')})")
     if res.status_code != 200:
         return
         
@@ -191,10 +195,15 @@ def scan_all_fanduel_markets():
         if dt_utc <= now_utc:
             continue
             
+        date_str = dt_utc.astimezone(central_tz).strftime("%Y-%m-%d")
+        
+        # STRICT TODAY-ONLY FILTER (Ignores tomorrow's games)
+        if date_str != today_ct_str:
+            continue
+            
         event_id = g["id"]
         home, away = g["home_team"], g["away_team"]
         time_ct = dt_utc.astimezone(central_tz).strftime("%-I:%M %p CT")
-        date_str = dt_utc.astimezone(central_tz).strftime("%Y-%m-%d")
         match_key = f"{date_str}_{away}_vs_{home}"
         
         h_stats = stats_db.get(home, {"off": avg_off, "def": avg_off, "pace": avg_pace})
@@ -226,7 +235,8 @@ def scan_all_fanduel_markets():
                             win_prob = norm.cdf(abs(diff) / NBA_STD_DEV_TOTAL)
                             edge = win_prob - american_to_implied_prob(juice)
                             if edge >= MIN_EDGE_TO_POST:
-                                base_text = f"🏀 NBA: {away} vs {home}\n{time_ct} - Total: {line} {pick_dir} ({juice:+d})"
+                                ev_pct = edge * 100.0
+                                base_text = f"🏀 NBA: {away} vs {home}\n{time_ct} - Total: {line} {pick_dir} ({juice:+d}) | 🔥 +{ev_pct:.1f}% EV"
                                 msg_id = post_alert_to_discord(base_text)
                                 if msg_id:
                                     tracked_bets.append({"bet_key": bet_key, "message_id": msg_id, "away": away, "home": home, "market": "FG_TOTAL", "line": line, "pick_dir": pick_dir, "base_text": base_text, "status": "PENDING"})
@@ -246,7 +256,8 @@ def scan_all_fanduel_markets():
                             win_prob = norm.cdf(abs(sp_diff) / NBA_STD_DEV_SPREAD)
                             edge = win_prob - american_to_implied_prob(juice)
                             if edge >= MIN_EDGE_TO_POST:
-                                base_text = f"🏀 NBA: {away} vs {home}\n{time_ct} - Spread: {pick_team} {pick_line:+.1f} ({juice:+d})"
+                                ev_pct = edge * 100.0
+                                base_text = f"🏀 NBA: {away} vs {home}\n{time_ct} - Spread: {pick_team} {pick_line:+.1f} ({juice:+d}) | 🔥 +{ev_pct:.1f}% EV"
                                 msg_id = post_alert_to_discord(base_text)
                                 if msg_id:
                                     tracked_bets.append({"bet_key": bet_key, "message_id": msg_id, "away": away, "home": home, "market": "FG_SPREAD", "pick_team": pick_team, "line": pick_line, "base_text": base_text, "status": "PENDING"})
@@ -294,7 +305,8 @@ def scan_all_fanduel_markets():
                                 win_prob = norm.cdf(abs(diff) / std_dev)
                                 edge = win_prob - american_to_implied_prob(juice)
                                 if edge >= MIN_EDGE_TO_POST:
-                                    base_text = f"🏀 NBA: {away} vs {home}\n{time_ct} - {period_label}: {line} {pick_dir} ({juice:+d})"
+                                    ev_pct = edge * 100.0
+                                    base_text = f"🏀 NBA: {away} vs {home}\n{time_ct} - {period_label}: {line} {pick_dir} ({juice:+d}) | 🔥 +{ev_pct:.1f}% EV"
                                     msg_id = post_alert_to_discord(base_text)
                                     if msg_id:
                                         tracked_bets.append({"bet_key": bet_key, "message_id": msg_id, "away": away, "home": home, "market": m_key.upper(), "line": line, "pick_dir": pick_dir, "base_text": base_text, "status": "PENDING"})
@@ -332,7 +344,8 @@ def scan_all_fanduel_markets():
                                     
                                 edge = win_prob - american_to_implied_prob(juice)
                                 if edge >= MIN_EDGE_TO_POST:
-                                    base_text = f"🏀 NBA Prop: {p_name} ({away} vs {home})\n{time_ct} - {stat_code}: {line} {pick_dir} ({juice:+d})"
+                                    ev_pct = edge * 100.0
+                                    base_text = f"🏀 NBA Prop: {p_name} ({away} vs {home})\n{time_ct} - {stat_code}: {line} {pick_dir} ({juice:+d}) | 🔥 +{ev_pct:.1f}% EV"
                                     msg_id = post_alert_to_discord(base_text)
                                     if msg_id:
                                         tracked_bets.append({"bet_key": bet_key, "message_id": msg_id, "away": away, "home": home, "market": "PLAYER_PROP", "player": p_name, "stat": stat_code, "line": line, "pick_dir": pick_dir, "base_text": base_text, "status": "PENDING"})
@@ -432,7 +445,7 @@ def check_scores_and_grade_all_markets():
         save_json(TRACKER_FILE, tracked_bets)
 
 if __name__ == "__main__":
-    print("🤖 4.0% +EV FANDUEL BOT + INJURY FILTER IS LIVE!")
+    print("🤖 TODAY-ONLY 4.0%+ EV FANDUEL BOT IS LIVE!")
     last_scan = 0
     while True:
         now_ts = time.time()

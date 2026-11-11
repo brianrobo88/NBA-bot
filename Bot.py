@@ -1,4 +1,4 @@
-!pip install -q pandas numpy scipy requests pytz
+
 
 import time
 import json

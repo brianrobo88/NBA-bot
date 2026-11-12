@@ -11,7 +11,6 @@ import pytz
 # ==========================================
 # 1. CREDENTIALS & 15.0% MINIMUM EV FILTER
 # ==========================================
-# Pulls securely from your GitHub Actions Secrets (no raw webhook exposed in code)
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
 THE_ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY", "9ecb23956a7654b951782fd28ec3a8b5").strip()
 
@@ -38,6 +37,25 @@ NBA_STD_DEV_H1_SPREAD = 8.8
 NBA_STD_DEV_Q1_TOTAL = 8.2
 NBA_STD_DEV_Q1_SPREAD = 6.2
 HOME_COURT_ADVANTAGE = 2.2
+
+DIVIDER = "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯"
+
+TEAM_ABBR = {
+    "Atlanta Hawks": "ATL", "Boston Celtics": "BOS", "Brooklyn Nets": "BKN",
+    "Charlotte Hornets": "CHA", "Chicago Bulls": "CHI", "Cleveland Cavaliers": "CLE",
+    "Dallas Mavericks": "DAL", "Denver Nuggets": "DEN", "Detroit Pistons": "DET",
+    "Golden State Warriors": "GSW", "Houston Rockets": "HOU", "Indiana Pacers": "IND",
+    "Los Angeles Clippers": "LAC", "LA Clippers": "LAC", "Los Angeles Lakers": "LAL",
+    "Memphis Grizzlies": "MEM", "Miami Heat": "MIA", "Milwaukee Bucks": "MIL",
+    "Minnesota Timberwolves": "MIN", "New Orleans Pelicans": "NOP", "New York Knicks": "NYK",
+    "Oklahoma City Thunder": "OKC", "Orlando Magic": "ORL", "Philadelphia 76ers": "PHI",
+    "Phoenix Suns": "PHX", "Portland Trail Blazers": "POR", "Sacramento Kings": "SAC",
+    "San Antonio Spurs": "SAS", "Toronto Raptors": "TOR", "Utah Jazz": "UTA",
+    "Washington Wizards": "WAS"
+}
+
+def get_abbr(team_name):
+    return TEAM_ABBR.get(team_name, team_name[:3].upper())
 
 def normalize_name(name):
     """Strips accents and suffixes so ESPN and FanDuel player names always match."""
@@ -110,7 +128,6 @@ def get_team_efficiency_baselines():
     }
 
 def get_fallback_player_baselines():
-    """Expanded baseline dictionary of Starters & Role Players blended with live ESPN boxscores."""
     raw_baselines = {
         "Jayson Tatum": {"PTS": 28.4, "REB": 8.5, "AST": 5.4},
         "Jaylen Brown": {"PTS": 25.2, "REB": 6.1, "AST": 4.2},
@@ -288,10 +305,6 @@ def get_fallback_player_baselines():
     return {normalize_name(k): v for k, v in raw_baselines.items()}
 
 def sync_live_nba_data():
-    """
-    Automatically pulls live NBA player stats (starters & role players) and
-    opponent defensive stats/rankings from ESPN's public endpoints every day.
-    """
     team_db = get_team_efficiency_baselines()
     player_db = get_fallback_player_baselines()
 
@@ -434,7 +447,6 @@ def sync_live_nba_data():
     return team_db, player_db, opp_ranks
 
 def fetch_injured_players():
-    """Pulls live injured/out player names from ESPN's league-wide injury feed + scoreboard."""
     injured_set = set()
     try:
         inj_url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/injuries"
@@ -462,20 +474,12 @@ def fetch_injured_players():
         pass
     return injured_set
 
-def format_matchup_tag(opp_rank, pick_dir):
-    """Returns an insight badge showing whether the opponent defense favors the pick."""
+def get_matchup_dot(opp_rank, pick_dir):
+    """Returns a compact traffic-light emoji indicating whether the defense favors the pick."""
     if pick_dir == "Over":
-        if opp_rank >= 21:
-            return "🟢 Favorable vs Weak Def"
-        elif opp_rank <= 10:
-            return "🔴 Tough Def"
-        return "🟡 Neutral Def"
+        return "🟢" if opp_rank >= 21 else ("🔴" if opp_rank <= 10 else "🟡")
     else:
-        if opp_rank <= 10:
-            return "🟢 Favorable vs Elite Def"
-        elif opp_rank >= 21:
-            return "🔴 Soft Def"
-        return "🟡 Neutral Def"
+        return "🟢" if opp_rank <= 10 else ("🔴" if opp_rank >= 21 else "🟡")
 
 def post_alert_to_discord(base_text):
     if not DISCORD_WEBHOOK_URL:
@@ -533,7 +537,9 @@ def scan_all_fanduel_markets():
         event_id = g["id"]
         home = normalize_team_name(g["home_team"])
         away = normalize_team_name(g["away_team"])
-        time_ct = dt_utc.astimezone(central_tz).strftime("%-I:%M %p CT")
+        h_ab = get_abbr(home)
+        a_ab = get_abbr(away)
+        time_short = dt_utc.astimezone(central_tz).strftime("%-I:%M%p").lower()
         match_key = f"{date_str}_{away}_vs_{home}"
 
         h_stats = stats_db.get(home, {"off": avg_off, "def": avg_off, "pace": avg_pace, "opp_reb": avg_opp_reb, "opp_ast": avg_opp_ast})
@@ -569,9 +575,10 @@ def scan_all_fanduel_markets():
                             if edge >= MIN_EDGE_TO_POST:
                                 ev_pct = edge * 100.0
                                 base_text = (
-                                    f"🏀 NBA: {away} vs {home}\n"
-                                    f"{time_ct} - Total: {line} {pick_dir} ({juice:+d}) | 🔥 +{ev_pct:.1f}% EV\n"
-                                    f"📊 Proj: {model_total:.1f} | Def Ranks: {away} #{a_ranks['PTS']} vs {home} #{h_ranks['PTS']}"
+                                    f"**{a_ab} @ {h_ab} — {pick_dir} {line}** `({juice:+d})`\n"
+                                    f"🔥 **+{ev_pct:.1f}% EV**  •  📊 Proj: **{model_total:.1f}**\n"
+                                    f"🛡️ Def: {a_ab} #{a_ranks['PTS']} vs {h_ab} #{h_ranks['PTS']}  •  🕒 {time_short}\n"
+                                    f"{DIVIDER}"
                                 )
                                 msg_id = post_alert_to_discord(base_text)
                                 if msg_id:
@@ -588,6 +595,8 @@ def scan_all_fanduel_markets():
                             sp_diff = model_margin - (-h_line)
                             pick_team = home if sp_diff >= 0 else away
                             opp_team = away if sp_diff >= 0 else home
+                            pick_ab = get_abbr(pick_team)
+                            opp_ab = get_abbr(opp_team)
                             pick_line = h_line if sp_diff >= 0 else float(away_o["point"])
                             juice = int(home_o["price"]) if sp_diff >= 0 else int(away_o["price"])
                             win_prob = norm.cdf(abs(sp_diff) / NBA_STD_DEV_SPREAD)
@@ -595,10 +604,12 @@ def scan_all_fanduel_markets():
                             if edge >= MIN_EDGE_TO_POST:
                                 ev_pct = edge * 100.0
                                 opp_def_rk = opp_ranks.get(opp_team, {}).get("PTS", 15)
+                                fair_line = -model_margin if pick_team == home else model_margin
                                 base_text = (
-                                    f"🏀 NBA: {away} vs {home}\n"
-                                    f"{time_ct} - Spread: {pick_team} {pick_line:+.1f} ({juice:+d}) | 🔥 +{ev_pct:.1f}% EV\n"
-                                    f"📊 Fair Line: {pick_team} {(-model_margin if pick_team == home else model_margin):+.1f} | Opp Def: {opp_team} #{opp_def_rk} PPG"
+                                    f"**{pick_ab} {pick_line:+.1f}** `({juice:+d})`  •  *{a_ab} @ {h_ab}*\n"
+                                    f"🔥 **+{ev_pct:.1f}% EV**  •  📊 Fair: **{pick_ab} {fair_line:+.1f}**\n"
+                                    f"🛡️ Opp Def: {opp_ab} **#{opp_def_rk}**  •  🕒 {time_short}\n"
+                                    f"{DIVIDER}"
                                 )
                                 msg_id = post_alert_to_discord(base_text)
                                 if msg_id:
@@ -632,7 +643,7 @@ def scan_all_fanduel_markets():
                         m_key = m["key"]
 
                         if m_key in ["totals_h1", "totals_q1"]:
-                            period_label = "1H Total" if m_key == "totals_h1" else "1Q Total"
+                            period_label = "1H" if m_key == "totals_h1" else "1Q"
                             scale = 0.505 if m_key == "totals_h1" else 0.254
                             std_dev = NBA_STD_DEV_H1_TOTAL if m_key == "totals_h1" else NBA_STD_DEV_Q1_TOTAL
                             bet_key = f"{match_key}_{m_key}"
@@ -650,9 +661,10 @@ def scan_all_fanduel_markets():
                                 if edge >= MIN_EDGE_TO_POST:
                                     ev_pct = edge * 100.0
                                     base_text = (
-                                        f"🏀 NBA: {away} vs {home}\n"
-                                        f"{time_ct} - {period_label}: {line} {pick_dir} ({juice:+d}) | 🔥 +{ev_pct:.1f}% EV\n"
-                                        f"📊 Proj: {proj_p_tot:.1f} | Pace: {exp_pace:.1f}"
+                                        f"**{a_ab} @ {h_ab} — {period_label} {pick_dir} {line}** `({juice:+d})`\n"
+                                        f"🔥 **+{ev_pct:.1f}% EV**  •  📊 Proj: **{proj_p_tot:.1f}**\n"
+                                        f"⚡ Pace: {exp_pace:.1f}  •  🕒 {time_short}\n"
+                                        f"{DIVIDER}"
                                     )
                                     msg_id = post_alert_to_discord(base_text)
                                     if msg_id:
@@ -706,11 +718,12 @@ def scan_all_fanduel_markets():
                                 edge = win_prob - american_to_implied_prob(juice)
                                 if edge >= MIN_EDGE_TO_POST:
                                     ev_pct = edge * 100.0
-                                    matchup_badge = format_matchup_tag(combined_def_rk, pick_dir)
+                                    dot = get_matchup_dot(combined_def_rk, pick_dir)
                                     base_text = (
-                                        f"🏀 NBA Prop: {p_name} ({away} vs {home})\n"
-                                        f"{time_ct} - {stat_code}: {line} {pick_dir} ({juice:+d}) | 🔥 +{ev_pct:.1f}% EV\n"
-                                        f"📊 Avg: {base_avg:.1f} (Proj: {lambda_proj:.1f}) | Matchup Def: #{combined_def_rk} ({opp_stat_val:.1f} {stat_code}/g - {matchup_badge})"
+                                        f"**{p_name} — {pick_dir} {line} {stat_code}** `({juice:+d})`\n"
+                                        f"🔥 **+{ev_pct:.1f}% EV**  •  📊 Avg: **{base_avg:.1f}** *(Proj: {lambda_proj:.1f})*\n"
+                                        f"{dot} Def: **#{combined_def_rk}** *({opp_stat_val:.1f}/g)*  •  🏀 {a_ab}@{h_ab} *({time_short})*\n"
+                                        f"{DIVIDER}"
                                     )
                                     msg_id = post_alert_to_discord(base_text)
                                     if msg_id:

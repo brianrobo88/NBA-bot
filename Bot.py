@@ -21,7 +21,7 @@ SCAN_PLAYER_PROPS = True      # Starters & Role Players: PTS, REB, AST
 
 MAX_DEEP_SCAN_GAMES_PER_RUN = 8
 MIN_EDGE_TO_POST = 0.150      # STRICT 15.0% OR BETTER +EV FILTER
-LOOKBACK_DAYS_FOR_STATS = 12  # Rolling days of ESPN boxscores for live player/opponent stats
+LOOKBACK_DAYS_FOR_STATS = 20  # Expanded to 20 days for a more stable recent sample
 
 TRACKER_FILE = "tracked_all_markets.json"
 SCANNED_EVENTS_FILE = "scanned_prop_events.json"
@@ -217,6 +217,7 @@ def get_fallback_player_baselines():
         "Jaden McDaniels": {"PTS": 10.6, "REB": 4.1, "AST": 1.6},
         "Donte DiVincenzo": {"PTS": 11.8, "REB": 3.8, "AST": 3.4},
         "Mike Conley": {"PTS": 9.2, "REB": 2.8, "AST": 5.4},
+        "Terance Shannon Jr": {"PTS": 11.1, "REB": 3.5, "AST": 2.6},
         "Devin Booker": {"PTS": 27.8, "REB": 4.6, "AST": 6.9},
         "Bradley Beal": {"PTS": 17.8, "REB": 4.1, "AST": 4.6},
         "Jusuf Nurkic": {"PTS": 9.6, "REB": 9.8, "AST": 2.8},
@@ -399,15 +400,16 @@ def sync_live_nba_data():
             continue
 
     for norm_p, logs in player_logs.items():
-        if len(logs["PTS"]) >= 2:
+        if len(logs["PTS"]) >= 3:
             live_pts = float(np.mean(logs["PTS"]))
             live_reb = float(np.mean(logs["REB"]))
             live_ast = float(np.mean(logs["AST"]))
             if norm_p in player_db:
+                # 50% live recent form + 50% stable baseline anchor
                 player_db[norm_p] = {
-                    "PTS": round(0.60 * live_pts + 0.40 * player_db[norm_p]["PTS"], 2),
-                    "REB": round(0.60 * live_reb + 0.40 * player_db[norm_p]["REB"], 2),
-                    "AST": round(0.60 * live_ast + 0.40 * player_db[norm_p]["AST"], 2)
+                    "PTS": round(0.50 * live_pts + 0.50 * player_db[norm_p]["PTS"], 2),
+                    "REB": round(0.50 * live_reb + 0.50 * player_db[norm_p]["REB"], 2),
+                    "AST": round(0.50 * live_ast + 0.50 * player_db[norm_p]["AST"], 2)
                 }
             else:
                 player_db[norm_p] = {
@@ -474,7 +476,6 @@ def fetch_injured_players():
     return injured_set
 
 def get_matchup_dot(opp_rank, pick_dir):
-    """Returns a green/yellow/red dot based on whether the rank favors the pick."""
     if pick_dir == "Over":
         return "🟢" if opp_rank >= 21 else ("🔴" if opp_rank <= 10 else "🟡")
     else:
@@ -556,7 +557,6 @@ def scan_all_fanduel_markets():
         model_total = home_pts + away_pts
         model_margin = home_pts - away_pts
 
-        # --- A. FULL-GAME TOTALS & SPREADS ---
         if SCAN_FULL_GAME:
             for m in g["bookmakers"][0].get("markets", []):
                 if m["key"] == "totals":
@@ -615,7 +615,6 @@ def scan_all_fanduel_markets():
                                     tracked_bets.append({"bet_key": bet_key, "message_id": msg_id, "away": away, "home": home, "market": "FG_SPREAD", "pick_team": pick_team, "line": pick_line, "base_text": base_text, "status": "PENDING"})
                                     already_posted.add(bet_key)
 
-        # --- B. DEEP SCAN: 1H / 1Q & ALL STARTERS / ROLE PLAYER PROPS ---
         if (SCAN_HALVES_QUARTERS or SCAN_PLAYER_PROPS) and (event_id not in scanned_events) and (deep_scans_done < MAX_DEEP_SCAN_GAMES_PER_RUN):
             extra_markets = []
             if SCAN_HALVES_QUARTERS:

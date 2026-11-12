@@ -16,12 +16,12 @@ THE_ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY", "9ecb23956a7654b951782fd28ec3a8
 
 # Market Toggles
 SCAN_FULL_GAME = True         # Full-Game Spreads & Totals
-SCAN_HALVES_QUARTERS = True   # 1st Half & 1st Quarter
+SCAN_HALVES_QUARTERS = True   # 1st Half & 1st Quarter (Powered by Period-Specific Opponent Data)
 SCAN_PLAYER_PROPS = True      # Starters & Role Players: PTS, REB, AST
 
 MAX_DEEP_SCAN_GAMES_PER_RUN = 8
 MIN_EDGE_TO_POST = 0.150      # STRICT 15.0% OR BETTER +EV FILTER
-LOOKBACK_DAYS_FOR_STATS = 20  # Expanded to 20 days for a more stable recent sample
+LOOKBACK_DAYS_FOR_STATS = 20  # Rolling days for robust period-specific baselines
 
 TRACKER_FILE = "tracked_all_markets.json"
 SCANNED_EVENTS_FILE = "scanned_prop_events.json"
@@ -94,36 +94,36 @@ def american_to_implied_prob(odds_val):
 
 def get_team_efficiency_baselines():
     return {
-        "San Antonio Spurs": {"off": 119.4, "def": 107.5, "pace": 100.8, "opp_reb": 42.1, "opp_ast": 24.8},
-        "Houston Rockets": {"off": 119.2, "def": 109.7, "pace": 99.5, "opp_reb": 41.5, "opp_ast": 24.2},
-        "Golden State Warriors": {"off": 121.3, "def": 111.7, "pace": 101.2, "opp_reb": 44.2, "opp_ast": 26.1},
-        "Minnesota Timberwolves": {"off": 117.2, "def": 106.0, "pace": 98.4, "opp_reb": 41.2, "opp_ast": 23.9},
-        "Oklahoma City Thunder": {"off": 113.4, "def": 105.6, "pace": 100.5, "opp_reb": 45.8, "opp_ast": 24.0},
-        "Los Angeles Lakers": {"off": 122.3, "def": 114.7, "pace": 101.4, "opp_reb": 44.6, "opp_ast": 27.4},
-        "Portland Trail Blazers": {"off": 119.6, "def": 113.8, "pace": 99.8, "opp_reb": 44.9, "opp_ast": 26.8},
-        "Memphis Grizzlies": {"off": 117.3, "def": 110.2, "pace": 100.9, "opp_reb": 43.2, "opp_ast": 25.4},
-        "Dallas Mavericks": {"off": 115.8, "def": 111.0, "pace": 99.2, "opp_reb": 43.8, "opp_ast": 25.9},
-        "Denver Nuggets": {"off": 116.0, "def": 115.6, "pace": 98.1, "opp_reb": 42.6, "opp_ast": 26.5},
-        "Detroit Pistons": {"off": 114.3, "def": 106.2, "pace": 99.0, "opp_reb": 42.0, "opp_ast": 24.5},
-        "Boston Celtics": {"off": 119.6, "def": 108.6, "pace": 98.7, "opp_reb": 42.4, "opp_ast": 24.1},
-        "Los Angeles Clippers": {"off": 111.9, "def": 116.0, "pace": 97.8, "opp_reb": 43.5, "opp_ast": 26.2},
-        "Phoenix Suns": {"off": 112.6, "def": 121.5, "pace": 99.1, "opp_reb": 45.1, "opp_ast": 27.6},
-        "Toronto Raptors": {"off": 116.6, "def": 114.0, "pace": 100.2, "opp_reb": 44.0, "opp_ast": 26.7},
-        "Atlanta Hawks": {"off": 115.5, "def": 113.3, "pace": 101.8, "opp_reb": 45.3, "opp_ast": 27.8},
-        "New York Knicks": {"off": 114.6, "def": 108.5, "pace": 96.9, "opp_reb": 40.8, "opp_ast": 24.3},
-        "Cleveland Cavaliers": {"off": 115.9, "def": 114.5, "pace": 98.5, "opp_reb": 43.1, "opp_ast": 25.6},
-        "New Orleans Pelicans": {"off": 113.2, "def": 118.6, "pace": 99.4, "opp_reb": 45.6, "opp_ast": 27.9},
-        "Miami Heat": {"off": 111.8, "def": 116.9, "pace": 97.2, "opp_reb": 43.4, "opp_ast": 26.0},
-        "Utah Jazz": {"off": 104.4, "def": 116.0, "pace": 99.6, "opp_reb": 46.2, "opp_ast": 28.4},
-        "Philadelphia 76ers": {"off": 111.3, "def": 108.3, "pace": 98.0, "opp_reb": 43.0, "opp_ast": 25.0},
-        "Sacramento Kings": {"off": 108.5, "def": 121.6, "pace": 100.4, "opp_reb": 44.8, "opp_ast": 27.5},
-        "Indiana Pacers": {"off": 110.4, "def": 114.3, "pace": 102.1, "opp_reb": 45.9, "opp_ast": 27.1},
-        "Orlando Magic": {"off": 108.2, "def": 117.4, "pace": 98.3, "opp_reb": 41.9, "opp_ast": 24.6},
-        "Washington Wizards": {"off": 109.0, "def": 114.2, "pace": 101.5, "opp_reb": 47.4, "opp_ast": 28.9},
-        "Brooklyn Nets": {"off": 106.3, "def": 115.3, "pace": 97.6, "opp_reb": 44.5, "opp_ast": 26.4},
-        "Milwaukee Bucks": {"off": 108.6, "def": 121.9, "pace": 99.3, "opp_reb": 45.2, "opp_ast": 27.2},
-        "Charlotte Hornets": {"off": 103.5, "def": 115.6, "pace": 98.8, "opp_reb": 44.7, "opp_ast": 26.9},
-        "Chicago Bulls": {"off": 108.6, "def": 124.6, "pace": 100.7, "opp_reb": 46.5, "opp_ast": 28.2}
+        "San Antonio Spurs": {"off": 119.4, "def": 107.5, "pace": 100.8, "opp_reb": 42.1, "opp_ast": 24.8, "q1_off": 30.2, "q1_def": 27.5, "h1_off": 60.5, "h1_def": 54.2},
+        "Houston Rockets": {"off": 119.2, "def": 109.7, "pace": 99.5, "opp_reb": 41.5, "opp_ast": 24.2, "q1_off": 29.8, "q1_def": 27.1, "h1_off": 59.8, "h1_def": 54.8},
+        "Golden State Warriors": {"off": 121.3, "def": 111.7, "pace": 101.2, "opp_reb": 44.2, "opp_ast": 26.1, "q1_off": 31.4, "q1_def": 28.2, "h1_off": 62.1, "h1_def": 56.0},
+        "Minnesota Timberwolves": {"off": 117.2, "def": 106.0, "pace": 98.4, "opp_reb": 41.2, "opp_ast": 23.9, "q1_off": 29.1, "q1_def": 26.4, "h1_off": 58.4, "h1_def": 53.0},
+        "Oklahoma City Thunder": {"off": 113.4, "def": 105.6, "pace": 100.5, "opp_reb": 45.8, "opp_ast": 24.0, "q1_off": 28.8, "q1_def": 26.2, "h1_off": 57.6, "h1_def": 52.8},
+        "Los Angeles Lakers": {"off": 122.3, "def": 114.7, "pace": 101.4, "opp_reb": 44.6, "opp_ast": 27.4, "q1_off": 31.0, "q1_def": 28.9, "h1_off": 61.8, "h1_def": 57.5},
+        "Portland Trail Blazers": {"off": 119.6, "def": 113.8, "pace": 99.8, "opp_reb": 44.9, "opp_ast": 26.8, "q1_off": 29.5, "q1_def": 28.4, "h1_off": 59.2, "h1_def": 56.8},
+        "Memphis Grizzlies": {"off": 117.3, "def": 110.2, "pace": 100.9, "opp_reb": 43.2, "opp_ast": 25.4, "q1_off": 29.6, "q1_def": 27.8, "h1_off": 59.0, "h1_def": 55.2},
+        "Dallas Mavericks": {"off": 115.8, "def": 111.0, "pace": 99.2, "opp_reb": 43.8, "opp_ast": 25.9, "q1_off": 28.9, "q1_def": 27.9, "h1_off": 58.0, "h1_def": 55.6},
+        "Denver Nuggets": {"off": 116.0, "def": 115.6, "pace": 98.1, "opp_reb": 42.6, "opp_ast": 26.5, "q1_off": 29.2, "q1_def": 28.8, "h1_off": 58.5, "h1_def": 57.8},
+        "Detroit Pistons": {"off": 114.3, "def": 106.2, "pace": 99.0, "opp_reb": 42.0, "opp_ast": 24.5, "q1_off": 28.4, "q1_def": 26.6, "h1_off": 57.0, "h1_def": 53.2},
+        "Boston Celtics": {"off": 119.6, "def": 108.6, "pace": 98.7, "opp_reb": 42.4, "opp_ast": 24.1, "q1_off": 30.5, "q1_def": 27.0, "h1_off": 60.8, "h1_def": 54.0},
+        "Los Angeles Clippers": {"off": 111.9, "def": 116.0, "pace": 97.8, "opp_reb": 43.5, "opp_ast": 26.2, "q1_off": 27.8, "q1_def": 29.1, "h1_off": 55.8, "h1_def": 58.0},
+        "Phoenix Suns": {"off": 112.6, "def": 121.5, "pace": 99.1, "opp_reb": 45.1, "opp_ast": 27.6, "q1_off": 28.1, "q1_def": 30.2, "h1_off": 56.2, "h1_def": 60.5},
+        "Toronto Raptors": {"off": 116.6, "def": 114.0, "pace": 100.2, "opp_reb": 44.0, "opp_ast": 26.7, "q1_off": 29.0, "q1_def": 28.5, "h1_off": 58.2, "h1_def": 57.0},
+        "Atlanta Hawks": {"off": 115.5, "def": 113.3, "pace": 101.8, "opp_reb": 45.3, "opp_ast": 27.8, "q1_off": 29.4, "q1_def": 28.6, "h1_off": 58.8, "h1_def": 56.6},
+        "New York Knicks": {"off": 114.6, "def": 108.5, "pace": 96.9, "opp_reb": 40.8, "opp_ast": 24.3, "q1_off": 28.6, "q1_def": 27.1, "h1_off": 57.2, "h1_def": 54.2},
+        "Cleveland Cavaliers": {"off": 115.9, "def": 114.5, "pace": 98.5, "opp_reb": 43.1, "opp_ast": 25.6, "q1_off": 29.0, "q1_def": 28.6, "h1_off": 58.0, "h1_def": 57.2},
+        "New Orleans Pelicans": {"off": 113.2, "def": 118.6, "pace": 99.4, "opp_reb": 45.6, "opp_ast": 27.9, "q1_off": 28.2, "q1_def": 29.6, "h1_off": 56.4, "h1_def": 59.2},
+        "Miami Heat": {"off": 111.8, "def": 116.9, "pace": 97.2, "opp_reb": 43.4, "opp_ast": 26.0, "q1_off": 27.9, "q1_def": 29.2, "h1_off": 55.6, "h1_def": 58.4},
+        "Utah Jazz": {"off": 104.4, "def": 116.0, "pace": 99.6, "opp_reb": 46.2, "opp_ast": 28.4, "q1_off": 26.2, "q1_def": 29.0, "h1_off": 52.2, "h1_def": 58.0},
+        "Philadelphia 76ers": {"off": 111.3, "def": 108.3, "pace": 98.0, "opp_reb": 43.0, "opp_ast": 25.0, "q1_off": 27.8, "q1_def": 27.1, "h1_off": 55.5, "h1_def": 54.1},
+        "Sacramento Kings": {"off": 108.5, "def": 121.6, "pace": 100.4, "opp_reb": 44.8, "opp_ast": 27.5, "q1_off": 27.2, "q1_def": 30.4, "h1_off": 54.2, "h1_def": 60.8},
+        "Indiana Pacers": {"off": 110.4, "def": 114.3, "pace": 102.1, "opp_reb": 45.9, "opp_ast": 27.1, "q1_off": 27.6, "q1_def": 28.6, "h1_off": 55.0, "h1_def": 57.1},
+        "Orlando Magic": {"off": 108.2, "def": 117.4, "pace": 98.3, "opp_reb": 41.9, "opp_ast": 24.6, "q1_off": 27.0, "q1_def": 29.4, "h1_off": 54.0, "h1_def": 58.7},
+        "Washington Wizards": {"off": 109.0, "def": 114.2, "pace": 101.5, "opp_reb": 47.4, "opp_ast": 28.9, "q1_off": 27.4, "q1_def": 28.6, "h1_off": 54.6, "h1_def": 57.1},
+        "Brooklyn Nets": {"off": 106.3, "def": 115.3, "pace": 97.6, "opp_reb": 44.5, "opp_ast": 26.4, "q1_off": 26.6, "q1_def": 28.8, "h1_off": 53.1, "h1_def": 57.6},
+        "Milwaukee Bucks": {"off": 108.6, "def": 121.9, "pace": 99.3, "opp_reb": 45.2, "opp_ast": 27.2, "q1_off": 27.2, "q1_def": 30.5, "h1_off": 54.2, "h1_def": 61.0},
+        "Charlotte Hornets": {"off": 103.5, "def": 115.6, "pace": 98.8, "opp_reb": 44.7, "opp_ast": 26.9, "q1_off": 25.9, "q1_def": 28.9, "h1_off": 51.8, "h1_def": 57.8},
+        "Chicago Bulls": {"off": 108.6, "def": 124.6, "pace": 100.7, "opp_reb": 46.5, "opp_ast": 28.2, "q1_off": 27.2, "q1_def": 31.2, "h1_off": 54.2, "h1_def": 62.3}
     }
 
 def get_fallback_player_baselines():
@@ -313,7 +313,7 @@ def sync_live_nba_data():
     if cached.get("date") == today_str and cached.get("player_db") and cached.get("team_db"):
         return cached["team_db"], cached["player_db"], cached["opp_ranks"]
 
-    print("🔄 Syncing live NBA starters, role players, and opponent defensive stats from ESPN...")
+    print("🔄 Syncing live NBA player stats, period scoring, and defensive rankings from ESPN...")
 
     try:
         st_url = "https://site.api.espn.com/apis/v2/sports/basketball/nba/standings"
@@ -332,6 +332,7 @@ def sync_live_nba_data():
 
     player_logs = {}
     opp_allowed_logs = {t: {"PTS": [], "REB": [], "AST": []} for t in team_db}
+    period_logs = {t: {"q1_off": [], "q1_def": [], "h1_off": [], "h1_def": []} for t in team_db}
 
     now_utc = datetime.now(timezone.utc)
     for days_ago in range(1, LOOKBACK_DAYS_FOR_STATS + 1):
@@ -345,6 +346,28 @@ def sync_live_nba_data():
                 ev_id = ev["id"]
                 sum_url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event={ev_id}"
                 sum_data = requests.get(sum_url, timeout=8).json()
+
+                # Parse Period Linescores (Q1, H1)
+                comps = sum_data.get("header", {}).get("competitions", [{}])[0].get("competitors", [])
+                if len(comps) == 2:
+                    t1_name = normalize_team_name(comps[0].get("team", {}).get("displayName", ""))
+                    t2_name = normalize_team_name(comps[1].get("team", {}).get("displayName", ""))
+                    t1_lines = [float(x.get("value", 0)) for x in comps[0].get("linescores", [])]
+                    t2_lines = [float(x.get("value", 0)) for x in comps[1].get("linescores", [])]
+
+                    if len(t1_lines) >= 1 and len(t2_lines) >= 1 and t1_name in period_logs and t2_name in period_logs:
+                        period_logs[t1_name]["q1_off"].append(t1_lines[0])
+                        period_logs[t1_name]["q1_def"].append(t2_lines[0])
+                        period_logs[t2_name]["q1_off"].append(t2_lines[0])
+                        period_logs[t2_name]["q1_def"].append(t1_lines[0])
+
+                    if len(t1_lines) >= 2 and len(t2_lines) >= 2 and t1_name in period_logs and t2_name in period_logs:
+                        h1_t1 = t1_lines[0] + t1_lines[1]
+                        h1_t2 = t2_lines[0] + t2_lines[1]
+                        period_logs[t1_name]["h1_off"].append(h1_t1)
+                        period_logs[t1_name]["h1_def"].append(h1_t2)
+                        period_logs[t2_name]["h1_off"].append(h1_t2)
+                        period_logs[t2_name]["h1_def"].append(h1_t1)
 
                 p_boxes = sum_data.get("boxscore", {}).get("players", [])
                 if len(p_boxes) == 2:
@@ -426,6 +449,14 @@ def sync_live_nba_data():
         if len(logs["PTS"]) >= 2:
             team_db[t_name]["def"] = round(0.65 * float(np.mean(logs["PTS"])) + 0.35 * team_db[t_name]["def"], 1)
 
+    for t_name, p_logs in period_logs.items():
+        if len(p_logs["q1_off"]) >= 2:
+            team_db[t_name]["q1_off"] = round(0.60 * float(np.mean(p_logs["q1_off"])) + 0.40 * team_db[t_name]["q1_off"], 1)
+            team_db[t_name]["q1_def"] = round(0.60 * float(np.mean(p_logs["q1_def"])) + 0.40 * team_db[t_name]["q1_def"], 1)
+        if len(p_logs["h1_off"]) >= 2:
+            team_db[t_name]["h1_off"] = round(0.60 * float(np.mean(p_logs["h1_off"])) + 0.40 * team_db[t_name]["h1_off"], 1)
+            team_db[t_name]["h1_def"] = round(0.60 * float(np.mean(p_logs["h1_def"])) + 0.40 * team_db[t_name]["h1_def"], 1)
+
     pts_sorted = sorted(team_db.keys(), key=lambda x: team_db[x]["def"])
     reb_sorted = sorted(team_db.keys(), key=lambda x: team_db[x]["opp_reb"])
     ast_sorted = sorted(team_db.keys(), key=lambda x: team_db[x]["opp_ast"])
@@ -444,7 +475,7 @@ def sync_live_nba_data():
         "player_db": player_db,
         "opp_ranks": opp_ranks
     })
-    print(f"✅ Synced {len(player_db)} active NBA players & 30 team defensive rankings!")
+    print(f"✅ Synced {len(player_db)} active NBA players, period scoring, & team defensive rankings!")
     return team_db, player_db, opp_ranks
 
 def fetch_injured_players():
@@ -499,6 +530,8 @@ def scan_all_fanduel_markets():
     stats_db, player_db, opp_ranks = sync_live_nba_data()
     avg_off = float(np.mean([v["off"] for v in stats_db.values()]))
     avg_pace = float(np.mean([v["pace"] for v in stats_db.values()]))
+    avg_q1_off = float(np.mean([v["q1_off"] for v in stats_db.values()]))
+    avg_h1_off = float(np.mean([v["h1_off"] for v in stats_db.values()]))
     avg_opp_reb = float(np.mean([v["opp_reb"] for v in stats_db.values()]))
     avg_opp_ast = float(np.mean([v["opp_ast"] for v in stats_db.values()]))
 
@@ -542,8 +575,8 @@ def scan_all_fanduel_markets():
         time_short = dt_utc.astimezone(central_tz).strftime("%-I:%M%p").lower()
         match_key = f"{date_str}_{away}_vs_{home}"
 
-        h_stats = stats_db.get(home, {"off": avg_off, "def": avg_off, "pace": avg_pace, "opp_reb": avg_opp_reb, "opp_ast": avg_opp_ast})
-        a_stats = stats_db.get(away, {"off": avg_off, "def": avg_off, "pace": avg_pace, "opp_reb": avg_opp_reb, "opp_ast": avg_opp_ast})
+        h_stats = stats_db.get(home, {"off": avg_off, "def": avg_off, "pace": avg_pace, "opp_reb": avg_opp_reb, "opp_ast": avg_opp_ast, "q1_off": avg_q1_off, "q1_def": avg_q1_off, "h1_off": avg_h1_off, "h1_def": avg_h1_off})
+        a_stats = stats_db.get(away, {"off": avg_off, "def": avg_off, "pace": avg_pace, "opp_reb": avg_opp_reb, "opp_ast": avg_opp_ast, "q1_off": avg_q1_off, "q1_def": avg_q1_off, "h1_off": avg_h1_off, "h1_def": avg_h1_off})
         h_ranks = opp_ranks.get(home, {"PTS": 15, "REB": 15, "AST": 15})
         a_ranks = opp_ranks.get(away, {"PTS": 15, "REB": 15, "AST": 15})
 
@@ -641,27 +674,37 @@ def scan_all_fanduel_markets():
                         m_key = m["key"]
 
                         if m_key in ["totals_h1", "totals_q1"]:
-                            period_label = "1H" if m_key == "totals_h1" else "1Q"
-                            scale = 0.505 if m_key == "totals_h1" else 0.254
-                            std_dev = NBA_STD_DEV_H1_TOTAL if m_key == "totals_h1" else NBA_STD_DEV_Q1_TOTAL
+                            is_q1 = (m_key == "totals_q1")
+                            period_label = "1Q" if is_q1 else "1H"
+                            std_dev = NBA_STD_DEV_Q1_TOTAL if is_q1 else NBA_STD_DEV_H1_TOTAL
                             bet_key = f"{match_key}_{m_key}"
 
                             over_o = next((o for o in m["outcomes"] if o["name"] == "Over"), None)
                             under_o = next((o for o in m["outcomes"] if o["name"] == "Under"), None)
                             if over_o and under_o and bet_key not in already_posted:
                                 line = float(over_o["point"])
-                                proj_p_tot = model_total * scale
-                                diff = proj_p_tot - line
+
+                                # --- DYNAMIC PERIOD MATCHUP CALCULATION ---
+                                if is_q1:
+                                    home_period_pts = h_stats["q1_off"] * (a_stats["q1_def"] / avg_q1_off)
+                                    away_period_pts = a_stats["q1_off"] * (h_stats["q1_def"] / avg_q1_off)
+                                else:
+                                    home_period_pts = h_stats["h1_off"] * (a_stats["h1_def"] / avg_h1_off)
+                                    away_period_pts = a_stats["h1_off"] * (h_stats["h1_def"] / avg_h1_off)
+
+                                proj_period_tot = home_period_pts + away_period_pts
+                                diff = proj_period_tot - line
                                 pick_dir = "Over" if diff >= 0 else "Under"
                                 juice = int(over_o["price"]) if diff >= 0 else int(under_o["price"])
                                 win_prob = norm.cdf(abs(diff) / std_dev)
                                 edge = win_prob - american_to_implied_prob(juice)
+
                                 if edge >= MIN_EDGE_TO_POST:
                                     ev_pct = edge * 100.0
                                     base_text = (
                                         f"**{a_ab} @ {h_ab} — {period_label} {pick_dir} {line}** `({juice:+d})`\n"
-                                        f"🔥 **+{ev_pct:.1f}% EV**  •  📊 Proj: **{proj_p_tot:.1f}**\n"
-                                        f"⚡ Pace: {exp_pace:.1f}  •  🕒 {time_short}\n"
+                                        f"🔥 **+{ev_pct:.1f}% EV**  •  📊 Proj: **{proj_period_tot:.1f}**\n"
+                                        f"⚡ Period Matchup Sync  •  🕒 {time_short}\n"
                                         f"{DIVIDER}"
                                     )
                                     msg_id = post_alert_to_discord(base_text)

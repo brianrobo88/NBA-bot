@@ -58,7 +58,6 @@ def get_abbr(team_name):
     return TEAM_ABBR.get(team_name, team_name[:3].upper())
 
 def normalize_name(name):
-    """Strips accents and suffixes so ESPN and FanDuel player names always match."""
     if not name:
         return ""
     clean = unicodedata.normalize("NFKD", str(name)).encode("ASCII", "ignore").decode("utf-8")
@@ -475,7 +474,7 @@ def fetch_injured_players():
     return injured_set
 
 def get_matchup_dot(opp_rank, pick_dir):
-    """Returns a compact traffic-light emoji indicating whether the defense favors the pick."""
+    """Returns a green/yellow/red dot based on whether the rank favors the pick."""
     if pick_dir == "Over":
         return "🟢" if opp_rank >= 21 else ("🔴" if opp_rank <= 10 else "🟡")
     else:

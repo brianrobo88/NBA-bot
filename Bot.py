@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 import pytz
 
 # ==========================================
-# 1. CREDENTIALS & 4.0% MINIMUM EV FILTER
+# 1. CREDENTIALS & 15.0% MINIMUM EV FILTER
 # ==========================================
 DISCORD_WEBHOOK_URL = os.getenv(
     "DISCORD_WEBHOOK_URL",
@@ -23,8 +23,9 @@ SCAN_HALVES_QUARTERS = True   # 1st Half & 1st Quarter
 SCAN_PLAYER_PROPS = True      # Starters & Role Players: PTS, REB, AST
 
 MAX_DEEP_SCAN_GAMES_PER_RUN = 8
-MIN_EDGE_TO_POST = 0.040      # STRICT 4.0% OR BETTER +EV FILTER
+MIN_EDGE_TO_POST = 0.150      # STRICT 15.0% OR BETTER +EV FILTER
 LOOKBACK_DAYS_FOR_STATS = 12  # Rolling days of ESPN boxscores for live player/opponent stats
+
 
 TRACKER_FILE = "tracked_all_markets.json"
 SCANNED_EVENTS_FILE = "scanned_prop_events.json"

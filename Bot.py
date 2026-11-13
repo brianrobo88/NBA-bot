@@ -16,12 +16,12 @@ THE_ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY", "9ecb23956a7654b951782fd28ec3a8
 
 # Market Toggles
 SCAN_FULL_GAME = True         # Full-Game Spreads & Totals
-SCAN_HALVES_QUARTERS = True   # 1st Half & 1st Quarter (Powered by Period-Specific Opponent Data)
-SCAN_PLAYER_PROPS = True      # Starters & Role Players: PTS, REB, AST
+SCAN_HALVES_QUARTERS = True   # 1st Half & 1st Quarter
+SCAN_PLAYER_PROPS = True      # Starters & Role Players: PTS, REB, AST (Dual-Layer Defense)
 
 MAX_DEEP_SCAN_GAMES_PER_RUN = 8
 MIN_EDGE_TO_POST = 0.150      # STRICT 15.0% OR BETTER +EV FILTER
-LOOKBACK_DAYS_FOR_STATS = 20  # Rolling days for robust period-specific baselines
+LOOKBACK_DAYS_FOR_STATS = 20  # Rolling days for robust baseline data
 
 TRACKER_FILE = "tracked_all_markets.json"
 SCANNED_EVENTS_FILE = "scanned_prop_events.json"
@@ -128,179 +128,179 @@ def get_team_efficiency_baselines():
 
 def get_fallback_player_baselines():
     raw_baselines = {
-        "Jayson Tatum": {"PTS": 28.4, "REB": 8.5, "AST": 5.4},
-        "Jaylen Brown": {"PTS": 25.2, "REB": 6.1, "AST": 4.2},
-        "Derrick White": {"PTS": 16.8, "REB": 4.3, "AST": 5.1},
-        "Jrue Holiday": {"PTS": 12.8, "REB": 4.8, "AST": 4.6},
-        "Kristaps Porzingis": {"PTS": 19.5, "REB": 7.1, "AST": 2.0},
-        "Payton Pritchard": {"PTS": 13.4, "REB": 3.2, "AST": 3.8},
-        "Al Horford": {"PTS": 8.6, "REB": 6.2, "AST": 2.6},
-        "Jalen Brunson": {"PTS": 27.9, "REB": 3.6, "AST": 6.8},
-        "Karl-Anthony Towns": {"PTS": 24.5, "REB": 11.8, "AST": 3.1},
-        "Mikal Bridges": {"PTS": 17.8, "REB": 3.9, "AST": 3.4},
-        "OG Anunoby": {"PTS": 16.4, "REB": 5.1, "AST": 2.2},
-        "Josh Hart": {"PTS": 13.2, "REB": 8.6, "AST": 5.2},
-        "Miles McBride": {"PTS": 10.4, "REB": 2.1, "AST": 2.4},
-        "Shai Gilgeous-Alexander": {"PTS": 31.2, "REB": 5.6, "AST": 6.4},
-        "Jalen Williams": {"PTS": 21.4, "REB": 5.4, "AST": 5.1},
-        "Chet Holmgren": {"PTS": 18.2, "REB": 8.8, "AST": 2.6},
-        "Lu Dort": {"PTS": 10.8, "REB": 3.8, "AST": 1.6},
-        "Isaiah Hartenstein": {"PTS": 11.4, "REB": 10.8, "AST": 3.6},
-        "Alex Caruso": {"PTS": 7.8, "REB": 3.2, "AST": 2.8},
-        "Cason Wallace": {"PTS": 8.4, "REB": 2.8, "AST": 2.1},
-        "Aaron Wiggins": {"PTS": 9.8, "REB": 3.4, "AST": 1.5},
-        "Damian Lillard": {"PTS": 20.4, "REB": 3.8, "AST": 4.9},
-        "Anfernee Simons": {"PTS": 19.6, "REB": 3.1, "AST": 4.8},
-        "Jerami Grant": {"PTS": 18.4, "REB": 4.1, "AST": 2.4},
-        "Deandre Ayton": {"PTS": 14.8, "REB": 10.4, "AST": 1.6},
-        "Scoot Henderson": {"PTS": 13.6, "REB": 3.2, "AST": 5.4},
-        "Shaedon Sharpe": {"PTS": 16.2, "REB": 4.4, "AST": 2.6},
-        "Deni Avdija": {"PTS": 13.8, "REB": 6.6, "AST": 3.6},
-        "Toumani Camara": {"PTS": 9.6, "REB": 5.8, "AST": 1.8},
-        "Donovan Clingan": {"PTS": 7.8, "REB": 7.4, "AST": 1.2},
-        "Stephen Curry": {"PTS": 26.4, "REB": 4.5, "AST": 5.2},
-        "Draymond Green": {"PTS": 8.8, "REB": 6.8, "AST": 6.2},
-        "Andrew Wiggins": {"PTS": 16.4, "REB": 4.8, "AST": 2.1},
-        "Jonathan Kuminga": {"PTS": 15.8, "REB": 4.6, "AST": 2.2},
-        "Buddy Hield": {"PTS": 14.6, "REB": 3.4, "AST": 2.1},
-        "Brandin Podziemski": {"PTS": 10.2, "REB": 5.1, "AST": 4.2},
-        "Trayce Jackson-Davis": {"PTS": 8.9, "REB": 6.4, "AST": 1.8},
-        "Kevin Durant": {"PTS": 27.4, "REB": 6.6, "AST": 4.8},
-        "Alperen Sengun": {"PTS": 21.6, "REB": 11.2, "AST": 5.1},
-        "Jalen Green": {"PTS": 22.4, "REB": 4.8, "AST": 3.4},
-        "Fred VanVleet": {"PTS": 15.8, "REB": 4.1, "AST": 6.8},
-        "Jabari Smith Jr": {"PTS": 13.6, "REB": 7.8, "AST": 1.6},
-        "Dillon Brooks": {"PTS": 12.4, "REB": 3.8, "AST": 1.6},
-        "Amen Thompson": {"PTS": 11.8, "REB": 7.2, "AST": 3.4},
-        "Tari Eason": {"PTS": 11.2, "REB": 6.4, "AST": 1.4},
-        "Paolo Banchero": {"PTS": 25.8, "REB": 7.6, "AST": 5.4},
-        "Franz Wagner": {"PTS": 24.8, "REB": 5.7, "AST": 4.6},
-        "Jalen Suggs": {"PTS": 15.6, "REB": 4.2, "AST": 3.8},
-        "Wendell Carter Jr": {"PTS": 10.8, "REB": 8.4, "AST": 2.1},
-        "Kentavious Caldwell-Pope": {"PTS": 9.4, "REB": 2.4, "AST": 1.9},
-        "Cole Anthony": {"PTS": 11.2, "REB": 3.6, "AST": 3.2},
-        "Moritz Wagner": {"PTS": 10.6, "REB": 4.8, "AST": 1.4},
-        "Anthony Black": {"PTS": 8.4, "REB": 3.1, "AST": 3.6},
-        "Lauri Markkanen": {"PTS": 23.6, "REB": 8.2, "AST": 2.1},
-        "Keyonte George": {"PTS": 16.4, "REB": 3.4, "AST": 5.8},
-        "Collin Sexton": {"PTS": 17.8, "REB": 2.8, "AST": 4.4},
-        "John Collins": {"PTS": 16.2, "REB": 8.4, "AST": 2.1},
-        "Walker Kessler": {"PTS": 10.4, "REB": 10.8, "AST": 1.4},
-        "Jordan Clarkson": {"PTS": 15.4, "REB": 3.2, "AST": 3.8},
-        "LeBron James": {"PTS": 24.2, "REB": 7.4, "AST": 8.9},
-        "Anthony Davis": {"PTS": 26.8, "REB": 12.4, "AST": 3.6},
-        "Austin Reaves": {"PTS": 17.6, "REB": 4.2, "AST": 5.4},
-        "Rui Hachimura": {"PTS": 13.4, "REB": 5.2, "AST": 1.4},
-        "D'Angelo Russell": {"PTS": 14.2, "REB": 2.8, "AST": 5.6},
-        "Dalton Knecht": {"PTS": 11.4, "REB": 3.2, "AST": 1.4},
-        "James Harden": {"PTS": 21.4, "REB": 5.8, "AST": 8.9},
-        "Norman Powell": {"PTS": 22.6, "REB": 3.4, "AST": 2.4},
-        "Ivica Zubac": {"PTS": 15.8, "REB": 12.2, "AST": 2.4},
-        "Derrick Jones Jr": {"PTS": 10.2, "REB": 3.6, "AST": 1.1},
-        "Terance Mann": {"PTS": 8.4, "REB": 3.4, "AST": 2.1},
-        "Nikola Jokic": {"PTS": 29.1, "REB": 13.2, "AST": 10.4},
-        "Jamal Murray": {"PTS": 21.8, "REB": 4.1, "AST": 6.5},
-        "Michael Porter Jr": {"PTS": 18.2, "REB": 7.1, "AST": 2.4},
-        "Aaron Gordon": {"PTS": 14.6, "REB": 6.4, "AST": 3.2},
-        "Christian Braun": {"PTS": 13.8, "REB": 5.1, "AST": 2.2},
-        "Russell Westbrook": {"PTS": 11.4, "REB": 4.6, "AST": 5.8},
-        "Luka Doncic": {"PTS": 34.5, "REB": 9.1, "AST": 9.6},
-        "Kyrie Irving": {"PTS": 25.4, "REB": 4.9, "AST": 5.3},
-        "Klay Thompson": {"PTS": 14.2, "REB": 3.4, "AST": 2.0},
-        "PJ Washington": {"PTS": 12.4, "REB": 7.6, "AST": 1.9},
-        "Daniel Gafford": {"PTS": 11.8, "REB": 7.2, "AST": 1.4},
-        "Dereck Lively II": {"PTS": 9.4, "REB": 7.8, "AST": 2.1},
-        "Anthony Edwards": {"PTS": 28.1, "REB": 5.8, "AST": 5.1},
-        "Julius Randle": {"PTS": 21.2, "REB": 7.4, "AST": 4.6},
-        "Rudy Gobert": {"PTS": 11.4, "REB": 11.2, "AST": 1.6},
-        "Naz Reid": {"PTS": 14.4, "REB": 5.6, "AST": 1.8},
-        "Jaden McDaniels": {"PTS": 10.6, "REB": 4.1, "AST": 1.6},
-        "Donte DiVincenzo": {"PTS": 11.8, "REB": 3.8, "AST": 3.4},
-        "Mike Conley": {"PTS": 9.2, "REB": 2.8, "AST": 5.4},
-        "Terance Shannon Jr": {"PTS": 11.1, "REB": 3.5, "AST": 2.6},
-        "Devin Booker": {"PTS": 27.8, "REB": 4.6, "AST": 6.9},
-        "Bradley Beal": {"PTS": 17.8, "REB": 4.1, "AST": 4.6},
-        "Jusuf Nurkic": {"PTS": 9.6, "REB": 9.8, "AST": 2.8},
-        "Tyus Jones": {"PTS": 10.4, "REB": 2.8, "AST": 6.4},
-        "Grayson Allen": {"PTS": 11.6, "REB": 3.2, "AST": 2.4},
-        "Victor Wembanyama": {"PTS": 26.8, "REB": 11.2, "AST": 4.1},
-        "De'Aaron Fox": {"PTS": 24.6, "REB": 4.6, "AST": 6.1},
-        "Devin Vassell": {"PTS": 17.6, "REB": 3.8, "AST": 3.6},
-        "Jeremy Sochan": {"PTS": 13.8, "REB": 7.8, "AST": 3.2},
-        "Chris Paul": {"PTS": 9.8, "REB": 3.8, "AST": 8.2},
-        "Harrison Barnes": {"PTS": 11.4, "REB": 4.4, "AST": 1.8},
-        "Stephon Castle": {"PTS": 11.2, "REB": 3.2, "AST": 3.8},
-        "Domantas Sabonis": {"PTS": 19.8, "REB": 14.1, "AST": 7.8},
-        "DeMar DeRozan": {"PTS": 22.8, "REB": 4.2, "AST": 4.4},
-        "Keegan Murray": {"PTS": 13.8, "REB": 7.2, "AST": 1.8},
-        "Malik Monk": {"PTS": 15.2, "REB": 3.2, "AST": 4.8},
-        "Ja Morant": {"PTS": 25.4, "REB": 5.1, "AST": 8.4},
-        "Jaren Jackson Jr": {"PTS": 22.4, "REB": 6.1, "AST": 1.8},
-        "Desmond Bane": {"PTS": 19.8, "REB": 4.6, "AST": 4.8},
-        "Santi Aldama": {"PTS": 12.6, "REB": 6.8, "AST": 2.4},
-        "Scotty Pippen Jr": {"PTS": 11.4, "REB": 3.8, "AST": 5.6},
-        "Zach Edey": {"PTS": 10.8, "REB": 7.6, "AST": 1.0},
-        "Giannis Antetokounmpo": {"PTS": 30.8, "REB": 11.6, "AST": 6.1},
-        "Bobby Portis": {"PTS": 13.4, "REB": 7.8, "AST": 1.4},
-        "Brook Lopez": {"PTS": 11.8, "REB": 5.2, "AST": 1.6},
-        "Gary Trent Jr": {"PTS": 11.2, "REB": 2.6, "AST": 1.6},
-        "Donovan Mitchell": {"PTS": 27.2, "REB": 4.4, "AST": 5.2},
-        "Darius Garland": {"PTS": 20.4, "REB": 2.8, "AST": 6.6},
-        "Evan Mobley": {"PTS": 18.2, "REB": 9.2, "AST": 2.8},
-        "Jarrett Allen": {"PTS": 14.6, "REB": 10.8, "AST": 2.1},
-        "Caris LeVert": {"PTS": 11.8, "REB": 3.4, "AST": 4.2},
-        "Tyrese Maxey": {"PTS": 27.6, "REB": 3.8, "AST": 6.4},
-        "Joel Embiid": {"PTS": 26.8, "REB": 10.4, "AST": 4.8},
-        "Paul George": {"PTS": 18.6, "REB": 5.6, "AST": 4.4},
-        "Kelly Oubre Jr": {"PTS": 13.8, "REB": 4.8, "AST": 1.6},
-        "Jared McCain": {"PTS": 15.2, "REB": 2.6, "AST": 2.8},
-        "Bam Adebayo": {"PTS": 20.2, "REB": 10.4, "AST": 4.1},
-        "Tyler Herro": {"PTS": 23.4, "REB": 5.2, "AST": 4.8},
-        "Jimmy Butler": {"PTS": 18.8, "REB": 5.4, "AST": 4.8},
-        "Terry Rozier": {"PTS": 13.4, "REB": 3.8, "AST": 4.2},
-        "Jaime Jaquez Jr": {"PTS": 10.8, "REB": 4.8, "AST": 2.4},
-        "Tyrese Haliburton": {"PTS": 21.4, "REB": 3.9, "AST": 10.4},
-        "Pascal Siakam": {"PTS": 20.6, "REB": 7.2, "AST": 3.8},
-        "Myles Turner": {"PTS": 15.8, "REB": 7.1, "AST": 1.6},
-        "Bennedict Mathurin": {"PTS": 16.8, "REB": 5.8, "AST": 2.0},
-        "Andrew Nembhard": {"PTS": 10.8, "REB": 3.1, "AST": 4.8},
-        "TJ McConnell": {"PTS": 10.2, "REB": 2.6, "AST": 5.2},
-        "Trae Young": {"PTS": 26.2, "REB": 3.1, "AST": 11.2},
-        "Jalen Johnson": {"PTS": 19.6, "REB": 10.1, "AST": 5.2},
-        "Dyson Daniels": {"PTS": 13.8, "REB": 5.1, "AST": 3.6},
-        "Clint Capela": {"PTS": 10.4, "REB": 9.2, "AST": 1.2},
-        "Onyeka Okongwu": {"PTS": 11.2, "REB": 6.8, "AST": 1.6},
-        "Zaccharie Risacher": {"PTS": 11.6, "REB": 3.8, "AST": 1.4},
-        "Cade Cunningham": {"PTS": 24.6, "REB": 6.4, "AST": 9.1},
-        "Jaden Ivey": {"PTS": 17.8, "REB": 4.2, "AST": 4.2},
-        "Tobias Harris": {"PTS": 13.8, "REB": 6.8, "AST": 2.4},
-        "Jalen Duren": {"PTS": 10.6, "REB": 10.2, "AST": 2.4},
-        "Malik Beasley": {"PTS": 15.4, "REB": 3.1, "AST": 1.8},
-        "LaMelo Ball": {"PTS": 26.9, "REB": 5.4, "AST": 8.2},
-        "Brandon Miller": {"PTS": 21.2, "REB": 5.2, "AST": 3.6},
-        "Miles Bridges": {"PTS": 17.4, "REB": 6.8, "AST": 3.1},
-        "Zach LaVine": {"PTS": 23.4, "REB": 4.8, "AST": 4.1},
-        "Nikola Vucevic": {"PTS": 18.2, "REB": 10.8, "AST": 3.4},
-        "Coby White": {"PTS": 19.4, "REB": 4.2, "AST": 4.8},
-        "Josh Giddey": {"PTS": 13.2, "REB": 6.8, "AST": 6.9},
-        "Ayo Dosunmu": {"PTS": 12.4, "REB": 3.6, "AST": 3.8},
-        "Scottie Barnes": {"PTS": 20.8, "REB": 8.2, "AST": 6.4},
-        "RJ Barrett": {"PTS": 22.6, "REB": 6.2, "AST": 5.8},
-        "Immanuel Quickley": {"PTS": 17.4, "REB": 3.8, "AST": 6.4},
-        "Jakob Poeltl": {"PTS": 15.2, "REB": 11.4, "AST": 2.6},
-        "Gradey Dick": {"PTS": 16.8, "REB": 3.4, "AST": 2.1},
-        "Cam Thomas": {"PTS": 24.2, "REB": 3.4, "AST": 3.4},
-        "Dennis Schroder": {"PTS": 17.8, "REB": 3.1, "AST": 6.4},
-        "Cameron Johnson": {"PTS": 18.2, "REB": 4.4, "AST": 2.9},
-        "Nic Claxton": {"PTS": 10.4, "REB": 8.4, "AST": 2.2},
-        "Jordan Poole": {"PTS": 20.2, "REB": 2.6, "AST": 4.8},
-        "Kyle Kuzma": {"PTS": 17.8, "REB": 6.2, "AST": 3.2},
-        "Alex Sarr": {"PTS": 10.8, "REB": 6.6, "AST": 2.1},
-        "Bilal Coulibaly": {"PTS": 13.4, "REB": 5.4, "AST": 2.8},
-        "Jonas Valanciunas": {"PTS": 12.2, "REB": 8.1, "AST": 2.2},
-        "Brandon Ingram": {"PTS": 22.8, "REB": 5.6, "AST": 5.2},
-        "Trey Murphy III": {"PTS": 18.4, "REB": 4.8, "AST": 2.6},
-        "Yves Missi": {"PTS": 9.2, "REB": 8.4, "AST": 1.4}
+        "Jayson Tatum": {"PTS": 28.4, "REB": 8.5, "AST": 5.4, "POS": "F"},
+        "Jaylen Brown": {"PTS": 25.2, "REB": 6.1, "AST": 4.2, "POS": "G"},
+        "Derrick White": {"PTS": 16.8, "REB": 4.3, "AST": 5.1, "POS": "G"},
+        "Jrue Holiday": {"PTS": 12.8, "REB": 4.8, "AST": 4.6, "POS": "G"},
+        "Kristaps Porzingis": {"PTS": 19.5, "REB": 7.1, "AST": 2.0, "POS": "C"},
+        "Payton Pritchard": {"PTS": 13.4, "REB": 3.2, "AST": 3.8, "POS": "G"},
+        "Al Horford": {"PTS": 8.6, "REB": 6.2, "AST": 2.6, "POS": "C"},
+        "Jalen Brunson": {"PTS": 27.9, "REB": 3.6, "AST": 6.8, "POS": "G"},
+        "Karl-Anthony Towns": {"PTS": 24.5, "REB": 11.8, "AST": 3.1, "POS": "C"},
+        "Mikal Bridges": {"PTS": 17.8, "REB": 3.9, "AST": 3.4, "POS": "F"},
+        "OG Anunoby": {"PTS": 16.4, "REB": 5.1, "AST": 2.2, "POS": "F"},
+        "Josh Hart": {"PTS": 13.2, "REB": 8.6, "AST": 5.2, "POS": "G"},
+        "Miles McBride": {"PTS": 10.4, "REB": 2.1, "AST": 2.4, "POS": "G"},
+        "Shai Gilgeous-Alexander": {"PTS": 31.2, "REB": 5.6, "AST": 6.4, "POS": "G"},
+        "Jalen Williams": {"PTS": 21.4, "REB": 5.4, "AST": 5.1, "POS": "F"},
+        "Chet Holmgren": {"PTS": 18.2, "REB": 8.8, "AST": 2.6, "POS": "C"},
+        "Lu Dort": {"PTS": 10.8, "REB": 3.8, "AST": 1.6, "POS": "G"},
+        "Isaiah Hartenstein": {"PTS": 11.4, "REB": 10.8, "AST": 3.6, "POS": "C"},
+        "Alex Caruso": {"PTS": 7.8, "REB": 3.2, "AST": 2.8, "POS": "G"},
+        "Cason Wallace": {"PTS": 8.4, "REB": 2.8, "AST": 2.1, "POS": "G"},
+        "Aaron Wiggins": {"PTS": 9.8, "REB": 3.4, "AST": 1.5, "POS": "G"},
+        "Damian Lillard": {"PTS": 20.4, "REB": 3.8, "AST": 4.9, "POS": "G"},
+        "Anfernee Simons": {"PTS": 19.6, "REB": 3.1, "AST": 4.8, "POS": "G"},
+        "Jerami Grant": {"PTS": 18.4, "REB": 4.1, "AST": 2.4, "POS": "F"},
+        "Deandre Ayton": {"PTS": 14.8, "REB": 10.4, "AST": 1.6, "POS": "C"},
+        "Scoot Henderson": {"PTS": 13.6, "REB": 3.2, "AST": 5.4, "POS": "G"},
+        "Shaedon Sharpe": {"PTS": 16.2, "REB": 4.4, "AST": 2.6, "POS": "G"},
+        "Deni Avdija": {"PTS": 13.8, "REB": 6.6, "AST": 3.6, "POS": "F"},
+        "Toumani Camara": {"PTS": 9.6, "REB": 5.8, "AST": 1.8, "POS": "F"},
+        "Donovan Clingan": {"PTS": 7.8, "REB": 7.4, "AST": 1.2, "POS": "C"},
+        "Stephen Curry": {"PTS": 26.4, "REB": 4.5, "AST": 5.2, "POS": "G"},
+        "Draymond Green": {"PTS": 8.8, "REB": 6.8, "AST": 6.2, "POS": "F"},
+        "Andrew Wiggins": {"PTS": 16.4, "REB": 4.8, "AST": 2.1, "POS": "F"},
+        "Jonathan Kuminga": {"PTS": 15.8, "REB": 4.6, "AST": 2.2, "POS": "F"},
+        "Buddy Hield": {"PTS": 14.6, "REB": 3.4, "AST": 2.1, "POS": "G"},
+        "Brandin Podziemski": {"PTS": 10.2, "REB": 5.1, "AST": 4.2, "POS": "G"},
+        "Trayce Jackson-Davis": {"PTS": 8.9, "REB": 6.4, "AST": 1.8, "POS": "C"},
+        "Kevin Durant": {"PTS": 27.4, "REB": 6.6, "AST": 4.8, "POS": "F"},
+        "Alperen Sengun": {"PTS": 21.6, "REB": 11.2, "AST": 5.1, "POS": "C"},
+        "Jalen Green": {"PTS": 22.4, "REB": 4.8, "AST": 3.4, "POS": "G"},
+        "Fred VanVleet": {"PTS": 15.8, "REB": 4.1, "AST": 6.8, "POS": "G"},
+        "Jabari Smith Jr": {"PTS": 13.6, "REB": 7.8, "AST": 1.6, "POS": "F"},
+        "Dillon Brooks": {"PTS": 12.4, "REB": 3.8, "AST": 1.6, "POS": "G"},
+        "Amen Thompson": {"PTS": 11.8, "REB": 7.2, "AST": 3.4, "POS": "G"},
+        "Tari Eason": {"PTS": 11.2, "REB": 6.4, "AST": 1.4, "POS": "F"},
+        "Paolo Banchero": {"PTS": 25.8, "REB": 7.6, "AST": 5.4, "POS": "F"},
+        "Franz Wagner": {"PTS": 24.8, "REB": 5.7, "AST": 4.6, "POS": "F"},
+        "Jalen Suggs": {"PTS": 15.6, "REB": 4.2, "AST": 3.8, "POS": "G"},
+        "Wendell Carter Jr": {"PTS": 10.8, "REB": 8.4, "AST": 2.1, "POS": "C"},
+        "Kentavious Caldwell-Pope": {"PTS": 9.4, "REB": 2.4, "AST": 1.9, "POS": "G"},
+        "Cole Anthony": {"PTS": 11.2, "REB": 3.6, "AST": 3.2, "POS": "G"},
+        "Moritz Wagner": {"PTS": 10.6, "REB": 4.8, "AST": 1.4, "POS": "C"},
+        "Anthony Black": {"PTS": 8.4, "REB": 3.1, "AST": 3.6, "POS": "G"},
+        "Lauri Markkanen": {"PTS": 23.6, "REB": 8.2, "AST": 2.1, "POS": "F"},
+        "Keyonte George": {"PTS": 16.4, "REB": 3.4, "AST": 5.8, "POS": "G"},
+        "Collin Sexton": {"PTS": 17.8, "REB": 2.8, "AST": 4.4, "POS": "G"},
+        "John Collins": {"PTS": 16.2, "REB": 8.4, "AST": 2.1, "POS": "F"},
+        "Walker Kessler": {"PTS": 10.4, "REB": 10.8, "AST": 1.4, "POS": "C"},
+        "Jordan Clarkson": {"PTS": 15.4, "REB": 3.2, "AST": 3.8, "POS": "G"},
+        "LeBron James": {"PTS": 24.2, "REB": 7.4, "AST": 8.9, "POS": "F"},
+        "Anthony Davis": {"PTS": 26.8, "REB": 12.4, "AST": 3.6, "POS": "C"},
+        "Austin Reaves": {"PTS": 17.6, "REB": 4.2, "AST": 5.4, "POS": "G"},
+        "Rui Hachimura": {"PTS": 13.4, "REB": 5.2, "AST": 1.4, "POS": "F"},
+        "D'Angelo Russell": {"PTS": 14.2, "REB": 2.8, "AST": 5.6, "POS": "G"},
+        "Dalton Knecht": {"PTS": 11.4, "REB": 3.2, "AST": 1.4, "POS": "G"},
+        "James Harden": {"PTS": 21.4, "REB": 5.8, "AST": 8.9, "POS": "G"},
+        "Norman Powell": {"PTS": 22.6, "REB": 3.4, "AST": 2.4, "POS": "G"},
+        "Ivica Zubac": {"PTS": 15.8, "REB": 12.2, "AST": 2.4, "POS": "C"},
+        "Derrick Jones Jr": {"PTS": 10.2, "REB": 3.6, "AST": 1.1, "POS": "F"},
+        "Terance Mann": {"PTS": 8.4, "REB": 3.4, "AST": 2.1, "POS": "G"},
+        "Nikola Jokic": {"PTS": 29.1, "REB": 13.2, "AST": 10.4, "POS": "C"},
+        "Jamal Murray": {"PTS": 21.8, "REB": 4.1, "AST": 6.5, "POS": "G"},
+        "Michael Porter Jr": {"PTS": 18.2, "REB": 7.1, "AST": 2.4, "POS": "F"},
+        "Aaron Gordon": {"PTS": 14.6, "REB": 6.4, "AST": 3.2, "POS": "F"},
+        "Christian Braun": {"PTS": 13.8, "REB": 5.1, "AST": 2.2, "POS": "G"},
+        "Russell Westbrook": {"PTS": 11.4, "REB": 4.6, "AST": 5.8, "POS": "G"},
+        "Luka Doncic": {"PTS": 34.5, "REB": 9.1, "AST": 9.6, "POS": "G"},
+        "Kyrie Irving": {"PTS": 25.4, "REB": 4.9, "AST": 5.3, "POS": "G"},
+        "Klay Thompson": {"PTS": 14.2, "REB": 3.4, "AST": 2.0, "POS": "G"},
+        "PJ Washington": {"PTS": 12.4, "REB": 7.6, "AST": 1.9, "POS": "F"},
+        "Daniel Gafford": {"PTS": 11.8, "REB": 7.2, "AST": 1.4, "POS": "C"},
+        "Dereck Lively II": {"PTS": 9.4, "REB": 7.8, "AST": 2.1, "POS": "C"},
+        "Anthony Edwards": {"PTS": 28.1, "REB": 5.8, "AST": 5.1, "POS": "G"},
+        "Julius Randle": {"PTS": 21.2, "REB": 7.4, "AST": 4.6, "POS": "F"},
+        "Rudy Gobert": {"PTS": 11.4, "REB": 11.2, "AST": 1.6, "POS": "C"},
+        "Naz Reid": {"PTS": 14.4, "REB": 5.6, "AST": 1.8, "POS": "C"},
+        "Jaden McDaniels": {"PTS": 10.6, "REB": 4.1, "AST": 1.6, "POS": "F"},
+        "Donte DiVincenzo": {"PTS": 11.8, "REB": 3.8, "AST": 3.4, "POS": "G"},
+        "Mike Conley": {"PTS": 9.2, "REB": 2.8, "AST": 5.4, "POS": "G"},
+        "Terance Shannon Jr": {"PTS": 11.1, "REB": 3.5, "AST": 2.6, "POS": "G"},
+        "Devin Booker": {"PTS": 27.8, "REB": 4.6, "AST": 6.9, "POS": "G"},
+        "Bradley Beal": {"PTS": 17.8, "REB": 4.1, "AST": 4.6, "POS": "G"},
+        "Jusuf Nurkic": {"PTS": 9.6, "REB": 9.8, "AST": 2.8, "POS": "C"},
+        "Tyus Jones": {"PTS": 10.4, "REB": 2.8, "AST": 6.4, "POS": "G"},
+        "Grayson Allen": {"PTS": 11.6, "REB": 3.2, "AST": 2.4, "POS": "G"},
+        "Victor Wembanyama": {"PTS": 26.8, "REB": 11.2, "AST": 4.1, "POS": "C"},
+        "De'Aaron Fox": {"PTS": 24.6, "REB": 4.6, "AST": 6.1, "POS": "G"},
+        "Devin Vassell": {"PTS": 17.6, "REB": 3.8, "AST": 3.6, "POS": "G"},
+        "Jeremy Sochan": {"PTS": 13.8, "REB": 7.8, "AST": 3.2, "POS": "F"},
+        "Chris Paul": {"PTS": 9.8, "REB": 3.8, "AST": 8.2, "POS": "G"},
+        "Harrison Barnes": {"PTS": 11.4, "REB": 4.4, "AST": 1.8, "POS": "F"},
+        "Stephon Castle": {"PTS": 11.2, "REB": 3.2, "AST": 3.8, "POS": "G"},
+        "Domantas Sabonis": {"PTS": 19.8, "REB": 14.1, "AST": 7.8, "POS": "C"},
+        "DeMar DeRozan": {"PTS": 22.8, "REB": 4.2, "AST": 4.4, "POS": "F"},
+        "Keegan Murray": {"PTS": 13.8, "REB": 7.2, "AST": 1.8, "POS": "F"},
+        "Malik Monk": {"PTS": 15.2, "REB": 3.2, "AST": 4.8, "POS": "G"},
+        "Ja Morant": {"PTS": 25.4, "REB": 5.1, "AST": 8.4, "POS": "G"},
+        "Jaren Jackson Jr": {"PTS": 22.4, "REB": 6.1, "AST": 1.8, "POS": "F"},
+        "Desmond Bane": {"PTS": 19.8, "REB": 4.6, "AST": 4.8, "POS": "G"},
+        "Santi Aldama": {"PTS": 12.6, "REB": 6.8, "AST": 2.4, "POS": "F"},
+        "Scotty Pippen Jr": {"PTS": 11.4, "REB": 3.8, "AST": 5.6, "POS": "G"},
+        "Zach Edey": {"PTS": 10.8, "REB": 7.6, "AST": 1.0, "POS": "C"},
+        "Giannis Antetokounmpo": {"PTS": 30.8, "REB": 11.6, "AST": 6.1, "POS": "F"},
+        "Bobby Portis": {"PTS": 13.4, "REB": 7.8, "AST": 1.4, "POS": "F"},
+        "Brook Lopez": {"PTS": 11.8, "REB": 5.2, "AST": 1.6, "POS": "C"},
+        "Gary Trent Jr": {"PTS": 11.2, "REB": 2.6, "AST": 1.6, "POS": "G"},
+        "Donovan Mitchell": {"PTS": 27.2, "REB": 4.4, "AST": 5.2, "POS": "G"},
+        "Darius Garland": {"PTS": 20.4, "REB": 2.8, "AST": 6.6, "POS": "G"},
+        "Evan Mobley": {"PTS": 18.2, "REB": 9.2, "AST": 2.8, "POS": "C"},
+        "Jarrett Allen": {"PTS": 14.6, "REB": 10.8, "AST": 2.1, "POS": "C"},
+        "Caris LeVert": {"PTS": 11.8, "REB": 3.4, "AST": 4.2, "POS": "G"},
+        "Tyrese Maxey": {"PTS": 27.6, "REB": 3.8, "AST": 6.4, "POS": "G"},
+        "Joel Embiid": {"PTS": 26.8, "REB": 10.4, "AST": 4.8, "POS": "C"},
+        "Paul George": {"PTS": 18.6, "REB": 5.6, "AST": 4.4, "POS": "F"},
+        "Kelly Oubre Jr": {"PTS": 13.8, "REB": 4.8, "AST": 1.6, "POS": "F"},
+        "Jared McCain": {"PTS": 15.2, "REB": 2.6, "AST": 2.8, "POS": "G"},
+        "Bam Adebayo": {"PTS": 20.2, "REB": 10.4, "AST": 4.1, "POS": "C"},
+        "Tyler Herro": {"PTS": 23.4, "REB": 5.2, "AST": 4.8, "POS": "G"},
+        "Jimmy Butler": {"PTS": 18.8, "REB": 5.4, "AST": 4.8, "POS": "F"},
+        "Terry Rozier": {"PTS": 13.4, "REB": 3.8, "AST": 4.2, "POS": "G"},
+        "Jaime Jaquez Jr": {"PTS": 10.8, "REB": 4.8, "AST": 2.4, "POS": "F"},
+        "Tyrese Haliburton": {"PTS": 21.4, "REB": 3.9, "AST": 10.4, "POS": "G"},
+        "Pascal Siakam": {"PTS": 20.6, "REB": 7.2, "AST": 3.8, "POS": "F"},
+        "Myles Turner": {"PTS": 15.8, "REB": 7.1, "AST": 1.6, "POS": "C"},
+        "Bennedict Mathurin": {"PTS": 16.8, "REB": 5.8, "AST": 2.0, "POS": "G"},
+        "Andrew Nembhard": {"PTS": 10.8, "REB": 3.1, "AST": 4.8, "POS": "G"},
+        "TJ McConnell": {"PTS": 10.2, "REB": 2.6, "AST": 5.2, "POS": "G"},
+        "Trae Young": {"PTS": 26.2, "REB": 3.1, "AST": 11.2, "POS": "G"},
+        "Jalen Johnson": {"PTS": 19.6, "REB": 10.1, "AST": 5.2, "POS": "F"},
+        "Dyson Daniels": {"PTS": 13.8, "REB": 5.1, "AST": 3.6, "POS": "G"},
+        "Clint Capela": {"PTS": 10.4, "REB": 9.2, "AST": 1.2, "POS": "C"},
+        "Onyeka Okongwu": {"PTS": 11.2, "REB": 6.8, "AST": 1.6, "POS": "C"},
+        "Zaccharie Risacher": {"PTS": 11.6, "REB": 3.8, "AST": 1.4, "POS": "F"},
+        "Cade Cunningham": {"PTS": 24.6, "REB": 6.4, "AST": 9.1, "POS": "G"},
+        "Jaden Ivey": {"PTS": 17.8, "REB": 4.2, "AST": 4.2, "POS": "G"},
+        "Tobias Harris": {"PTS": 13.8, "REB": 6.8, "AST": 2.4, "POS": "F"},
+        "Jalen Duren": {"PTS": 10.6, "REB": 10.2, "AST": 2.4, "POS": "C"},
+        "Malik Beasley": {"PTS": 15.4, "REB": 3.1, "AST": 1.8, "POS": "G"},
+        "LaMelo Ball": {"PTS": 26.9, "REB": 5.4, "AST": 8.2, "POS": "G"},
+        "Brandon Miller": {"PTS": 21.2, "REB": 5.2, "AST": 3.6, "POS": "F"},
+        "Miles Bridges": {"PTS": 17.4, "REB": 6.8, "AST": 3.1, "POS": "F"},
+        "Zach LaVine": {"PTS": 23.4, "REB": 4.8, "AST": 4.1, "POS": "G"},
+        "Nikola Vucevic": {"PTS": 18.2, "REB": 10.8, "AST": 3.4, "POS": "C"},
+        "Coby White": {"PTS": 19.4, "REB": 4.2, "AST": 4.8, "POS": "G"},
+        "Josh Giddey": {"PTS": 13.2, "REB": 6.8, "AST": 6.9, "POS": "G"},
+        "Ayo Dosunmu": {"PTS": 12.4, "REB": 3.6, "AST": 3.8, "POS": "G"},
+        "Scottie Barnes": {"PTS": 20.8, "REB": 8.2, "AST": 6.4, "POS": "F"},
+        "RJ Barrett": {"PTS": 22.6, "REB": 6.2, "AST": 5.8, "POS": "F"},
+        "Immanuel Quickley": {"PTS": 17.4, "REB": 3.8, "AST": 6.4, "POS": "G"},
+        "Jakob Poeltl": {"PTS": 15.2, "REB": 11.4, "AST": 2.6, "POS": "C"},
+        "Gradey Dick": {"PTS": 16.8, "REB": 3.4, "AST": 2.1, "POS": "G"},
+        "Cam Thomas": {"PTS": 24.2, "REB": 3.4, "AST": 3.4, "POS": "G"},
+        "Dennis Schroder": {"PTS": 17.8, "REB": 3.1, "AST": 6.4, "POS": "G"},
+        "Cameron Johnson": {"PTS": 18.2, "REB": 4.4, "AST": 2.9, "POS": "F"},
+        "Nic Claxton": {"PTS": 10.4, "REB": 8.4, "AST": 2.2, "POS": "C"},
+        "Jordan Poole": {"PTS": 20.2, "REB": 2.6, "AST": 4.8, "POS": "G"},
+        "Kyle Kuzma": {"PTS": 17.8, "REB": 6.2, "AST": 3.2, "POS": "F"},
+        "Alex Sarr": {"PTS": 10.8, "REB": 6.6, "AST": 2.1, "POS": "C"},
+        "Bilal Coulibaly": {"PTS": 13.4, "REB": 5.4, "AST": 2.8, "POS": "F"},
+        "Jonas Valanciunas": {"PTS": 12.2, "REB": 8.1, "AST": 2.2, "POS": "C"},
+        "Brandon Ingram": {"PTS": 22.8, "REB": 5.6, "AST": 5.2, "POS": "F"},
+        "Trey Murphy III": {"PTS": 18.4, "REB": 4.8, "AST": 2.6, "POS": "F"},
+        "Yves Missi": {"PTS": 9.2, "REB": 8.4, "AST": 1.4, "POS": "C"}
     }
     return {normalize_name(k): v for k, v in raw_baselines.items()}
 
@@ -347,7 +347,6 @@ def sync_live_nba_data():
                 sum_url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event={ev_id}"
                 sum_data = requests.get(sum_url, timeout=8).json()
 
-                # Parse Period Linescores (Q1, H1)
                 comps = sum_data.get("header", {}).get("competitions", [{}])[0].get("competitors", [])
                 if len(comps) == 2:
                     t1_name = normalize_team_name(comps[0].get("team", {}).get("displayName", ""))
@@ -428,17 +427,19 @@ def sync_live_nba_data():
             live_reb = float(np.mean(logs["REB"]))
             live_ast = float(np.mean(logs["AST"]))
             if norm_p in player_db:
-                # 50% live recent form + 50% stable baseline anchor
+                pos_val = player_db[norm_p].get("POS", "G")
                 player_db[norm_p] = {
                     "PTS": round(0.50 * live_pts + 0.50 * player_db[norm_p]["PTS"], 2),
                     "REB": round(0.50 * live_reb + 0.50 * player_db[norm_p]["REB"], 2),
-                    "AST": round(0.50 * live_ast + 0.50 * player_db[norm_p]["AST"], 2)
+                    "AST": round(0.50 * live_ast + 0.50 * player_db[norm_p]["AST"], 2),
+                    "POS": pos_val
                 }
             else:
                 player_db[norm_p] = {
                     "PTS": round(live_pts, 2),
                     "REB": round(live_reb, 2),
-                    "AST": round(live_ast, 2)
+                    "AST": round(live_ast, 2),
+                    "POS": "G"
                 }
 
     for t_name, logs in opp_allowed_logs.items():
@@ -655,6 +656,7 @@ def scan_all_fanduel_markets():
             if SCAN_PLAYER_PROPS:
                 extra_markets.extend(["player_points", "player_rebounds", "player_assists"])
 
+HashKey = "player_points"
             ev_url = f"https://api.the-odds-api.com/v4/sports/basketball_nba/events/{event_id}/odds"
             ev_params = {
                 "apiKey": THE_ODDS_API_KEY,
@@ -684,7 +686,6 @@ def scan_all_fanduel_markets():
                             if over_o and under_o and bet_key not in already_posted:
                                 line = float(over_o["point"])
 
-                                # --- DYNAMIC PERIOD MATCHUP CALCULATION ---
                                 if is_q1:
                                     home_period_pts = h_stats["q1_off"] * (a_stats["q1_def"] / avg_q1_off)
                                     away_period_pts = a_stats["q1_off"] * (h_stats["q1_def"] / avg_q1_off)
@@ -730,20 +731,27 @@ def scan_all_fanduel_markets():
                                     continue
 
                                 line = float(sides["Over"]["point"])
-                                base_avg = player_db[norm_p][stat_code]
+                                p_info = player_db[norm_p]
+                                base_avg = p_info[stat_code]
+                                p_pos = p_info.get("POS", "G")
 
+                                # --- DUAL-LAYER DEFENSE (TEAM + POSITION MODIFIER) ---
                                 if stat_code == "PTS":
-                                    matchup_mult = ((h_stats["def"] + a_stats["def"]) / 2.0) / avg_off
+                                    team_def_mult = ((h_stats["def"] + a_stats["def"]) / 2.0) / avg_off
                                     combined_def_rk = int(round((h_ranks["PTS"] + a_ranks["PTS"]) / 2.0))
                                     opp_stat_val = (h_stats["def"] + a_stats["def"]) / 2.0
                                 elif stat_code == "REB":
-                                    matchup_mult = ((h_stats["opp_reb"] + a_stats["opp_reb"]) / 2.0) / avg_opp_reb
+                                    team_def_mult = ((h_stats["opp_reb"] + a_stats["opp_reb"]) / 2.0) / avg_opp_reb
                                     combined_def_rk = int(round((h_ranks["REB"] + a_ranks["REB"]) / 2.0))
                                     opp_stat_val = (h_stats["opp_reb"] + a_stats["opp_reb"]) / 2.0
                                 else:
-                                    matchup_mult = ((h_stats["opp_ast"] + a_stats["opp_ast"]) / 2.0) / avg_opp_ast
+                                    team_def_mult = ((h_stats["opp_ast"] + a_stats["opp_ast"]) / 2.0) / avg_opp_ast
                                     combined_def_rk = int(round((h_ranks["AST"] + a_ranks["AST"]) / 2.0))
                                     opp_stat_val = (h_stats["opp_ast"] + a_stats["opp_ast"]) / 2.0
+
+                                # Position multiplier adjustment based on player position type
+                                pos_modifier = 1.05 if p_pos == "G" and stat_code in ["PTS", "AST"] else (1.05 if p_pos == "C" and stat_code == "REB" else 1.0)
+                                matchup_mult = (0.50 * team_def_mult) + (0.50 * (team_def_mult * pos_modifier))
 
                                 pace_mult = exp_pace / avg_pace
                                 lambda_proj = base_avg * (0.75 * matchup_mult + 0.25 * pace_mult)

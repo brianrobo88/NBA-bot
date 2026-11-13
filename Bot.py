@@ -21,7 +21,7 @@ SCAN_PLAYER_PROPS = True      # Starters & Role Players: PTS, REB, AST
 
 MAX_DEEP_SCAN_GAMES_PER_RUN = 8
 MIN_EDGE_TO_POST = 0.150      # STRICT 15.0% OR BETTER +EV FILTER
-LOOKBACK_DAYS_FOR_STATS = 20  # Rolling days of ESPN boxscores for live stats
+LOOKBACK_DAYS_FOR_STATS = 25  # Covers full season-to-date + rolling L10 game logs
 
 # Minimum Prop Line Filters (Avoids Poisson micro-line traps)
 MIN_PROP_LINE_PTS = 6.5
@@ -30,6 +30,7 @@ MIN_PROP_LINE_OTHER = 2.5
 TRACKER_FILE = "tracked_all_markets.json"
 SCANNED_EVENTS_FILE = "scanned_prop_events.json"
 LIVE_STATS_CACHE_FILE = "live_nba_stats_cache.json"
+CACHE_SCHEMA_VERSION = "v3_szn_period_fix"
 
 SCORE_CHECK_SECONDS = 300     # Checks ESPN scores every 5 mins (FREE)
 FANDUEL_SCAN_SECONDS = 7200   # Scans FanDuel every 2 hours
@@ -252,12 +253,16 @@ def get_fallback_player_baselines():
         "DeMar DeRozan": {"PTS": 22.8, "REB": 4.2, "AST": 4.4, "POS": "F", "TEAM": "Sacramento Kings"},
         "Keegan Murray": {"PTS": 13.8, "REB": 7.2, "AST": 1.8, "POS": "F", "TEAM": "Sacramento Kings"},
         "Malik Monk": {"PTS": 15.2, "REB": 3.2, "AST": 4.8, "POS": "G", "TEAM": "Sacramento Kings"},
+        "Darius Acuff Jr": {"PTS": 23.8, "REB": 3.8, "AST": 5.4, "POS": "G", "TEAM": "Sacramento Kings"},
         "Ja Morant": {"PTS": 25.4, "REB": 5.1, "AST": 8.4, "POS": "G", "TEAM": "Memphis Grizzlies"},
         "Jaren Jackson Jr": {"PTS": 22.4, "REB": 6.1, "AST": 1.8, "POS": "F", "TEAM": "Memphis Grizzlies"},
         "Desmond Bane": {"PTS": 19.8, "REB": 4.6, "AST": 4.8, "POS": "G", "TEAM": "Memphis Grizzlies"},
         "Santi Aldama": {"PTS": 12.6, "REB": 6.8, "AST": 2.4, "POS": "F", "TEAM": "Memphis Grizzlies"},
         "Scotty Pippen Jr": {"PTS": 11.4, "REB": 3.8, "AST": 5.6, "POS": "G", "TEAM": "Memphis Grizzlies"},
         "Zach Edey": {"PTS": 10.8, "REB": 7.6, "AST": 1.0, "POS": "C", "TEAM": "Memphis Grizzlies"},
+        "Cam Spencer": {"PTS": 9.3, "REB": 3.3, "AST": 4.8, "POS": "G", "TEAM": "Memphis Grizzlies"},
+        "GG Jackson": {"PTS": 7.8, "REB": 3.4, "AST": 1.2, "POS": "F", "TEAM": "Memphis Grizzlies"},
+        "Cedric Coward": {"PTS": 11.2, "REB": 7.8, "AST": 2.1, "POS": "F", "TEAM": "Memphis Grizzlies"},
         # East Rest of League
         "Giannis Antetokounmpo": {"PTS": 30.8, "REB": 11.6, "AST": 6.1, "POS": "F", "TEAM": "Milwaukee Bucks"},
         "Bobby Portis": {"PTS": 13.4, "REB": 7.8, "AST": 1.4, "POS": "F", "TEAM": "Milwaukee Bucks"},
@@ -330,6 +335,75 @@ def get_fallback_player_baselines():
     }
     return {normalize_name(k): v for k, v in raw_baselines.items()}
 
+def fetch_espn_season_averages():
+    """Pulls official full-season player averages (PTS, REB, AST, MIN) directly from ESPN."""
+    season_map = {}
+    base_url = "https://site.web.api.espn.com/apis/common/v3/sports/basketball/nba/statistics/byathlete"
+    for page in range(1, 9):
+        params = {
+            "region": "us",
+            "lang": "en",
+            "contentorigin": "espn",
+            "isqualified": "false",
+            "page": page,
+            "limit": 100
+        }
+        try:
+            res = requests.get(base_url, params=params, timeout=10)
+            if res.status_code != 200:
+                break
+            data = res.json()
+            athletes = data.get("athletes", [])
+            if not athletes:
+                break
+
+            top_cat_names = {}
+            for c in data.get("categories", []):
+                if c.get("name") and c.get("names"):
+                    top_cat_names[c["name"]] = c["names"]
+
+            for item in athletes:
+                ath = item.get("athlete", {})
+                p_disp = ath.get("displayName", "")
+                if not p_disp:
+                    continue
+                norm_p = normalize_name(p_disp)
+                t_raw = ath.get("teamName") or ath.get("team", {}).get("displayName", "")
+                t_name = normalize_team_name(t_raw) if t_raw else ""
+                pos_abbr = ath.get("position", {}).get("abbreviation", "G")
+                p_pos = "C" if "C" in pos_abbr else ("F" if "F" in pos_abbr else "G")
+
+                stat_dict = {}
+                for cat_blk in item.get("categories", []):
+                    c_name = cat_blk.get("name", "")
+                    names_list = cat_blk.get("names") or top_cat_names.get(c_name, [])
+                    vals_list = cat_blk.get("values") or cat_blk.get("totals") or []
+                    for k_name, v_val in zip(names_list, vals_list):
+                        try:
+                            stat_dict[k_name] = float(v_val)
+                        except:
+                            continue
+
+                pts = stat_dict.get("avgPoints")
+                reb = stat_dict.get("avgRebounds")
+                ast = stat_dict.get("avgAssists")
+                mins = stat_dict.get("avgMinutes", 20.0)
+
+                if pts is not None and reb is not None and ast is not None and mins >= 10.0:
+                    season_map[norm_p] = {
+                        "PTS": round(float(pts), 2),
+                        "REB": round(float(reb), 2),
+                        "AST": round(float(ast), 2),
+                        "POS": p_pos,
+                        "TEAM": t_name
+                    }
+
+            if page >= data.get("pagination", {}).get("pages", 1):
+                break
+        except:
+            break
+    return season_map
+
 def sync_live_nba_data():
     team_db = get_team_efficiency_baselines()
     player_db = get_fallback_player_baselines()
@@ -339,10 +413,40 @@ def sync_live_nba_data():
     today_str = now_ct.strftime("%Y-%m-%d")
 
     cached = load_json(LIVE_STATS_CACHE_FILE, {})
-    if cached.get("date") == today_str and cached.get("player_db") and cached.get("team_db") and "b2b_teams" in cached:
+    if (
+        cached.get("date") == today_str
+        and cached.get("schema_version") == CACHE_SCHEMA_VERSION
+        and cached.get("player_db")
+        and cached.get("team_db")
+        and "b2b_teams" in cached
+    ):
         return cached["team_db"], cached["player_db"], cached["opp_ranks"], set(cached["b2b_teams"])
 
-    print("🔄 Syncing live NBA stats, team rosters, B2B rest, and period splits from ESPN...")
+    print("🔄 Syncing official ESPN season averages, L10 game logs, B2B rest, and period splits...")
+
+    # 1. Layer Official ESPN Season Averages on top of Fallback Dictionary
+    espn_season_stats = fetch_espn_season_averages()
+    for norm_p, s_data in espn_season_stats.items():
+        prev_team = player_db.get(norm_p, {}).get("TEAM", "")
+        player_db[norm_p] = {
+            "PTS": s_data["PTS"],
+            "REB": s_data["REB"],
+            "AST": s_data["AST"],
+            "SZN_PTS": s_data["PTS"],
+            "SZN_REB": s_data["REB"],
+            "SZN_AST": s_data["AST"],
+            "L10_PTS": s_data["PTS"],
+            "L10_REB": s_data["REB"],
+            "L10_AST": s_data["AST"],
+            "POS": s_data["POS"],
+            "TEAM": s_data["TEAM"] or prev_team
+        }
+
+    # Ensure fallback players also carry SZN/L10 keys
+    for norm_p, p_data in player_db.items():
+        for k in ["PTS", "REB", "AST"]:
+            p_data.setdefault(f"SZN_{k}", p_data[k])
+            p_data.setdefault(f"L10_{k}", p_data[k])
 
     try:
         st_url = "https://site.api.espn.com/apis/v2/sports/basketball/nba/standings"
@@ -364,7 +468,7 @@ def sync_live_nba_data():
     period_logs = {t: {"q1_off": [], "q1_def": [], "h1_off": [], "h1_def": []} for t in team_db}
     b2b_teams = set()
 
-    # Loop from oldest to most recent so latest team assignment always wins
+    # Loop from oldest to most recent so latest team assignment and L10 order stay exact
     for days_ago in range(LOOKBACK_DAYS_FOR_STATS, 0, -1):
         d_str = (now_ct - timedelta(days=days_ago)).strftime("%Y%m%d")
         sb_url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={d_str}"
@@ -386,16 +490,17 @@ def sync_live_nba_data():
                         b2b_teams.add(t1_name)
                         b2b_teams.add(t2_name)
 
-                    t1_lines = [float(x.get("value", 0)) for x in comps[0].get("linescores", [])]
-                    t2_lines = [float(x.get("value", 0)) for x in comps[1].get("linescores", [])]
+                    # Read displayValue OR value so period linescores never default to 0.0
+                    t1_lines = [float(x.get("displayValue") or x.get("value") or 0) for x in comps[0].get("linescores", [])]
+                    t2_lines = [float(x.get("displayValue") or x.get("value") or 0) for x in comps[1].get("linescores", [])]
 
-                    if len(t1_lines) >= 1 and len(t2_lines) >= 1 and t1_name in period_logs and t2_name in period_logs:
+                    if len(t1_lines) >= 1 and len(t2_lines) >= 1 and t1_lines[0] > 0 and t2_lines[0] > 0 and t1_name in period_logs and t2_name in period_logs:
                         period_logs[t1_name]["q1_off"].append(t1_lines[0])
                         period_logs[t1_name]["q1_def"].append(t2_lines[0])
                         period_logs[t2_name]["q1_off"].append(t2_lines[0])
                         period_logs[t2_name]["q1_def"].append(t1_lines[0])
 
-                    if len(t1_lines) >= 2 and len(t2_lines) >= 2 and t1_name in period_logs and t2_name in period_logs:
+                    if len(t1_lines) >= 2 and len(t2_lines) >= 2 and (t1_lines[0] + t1_lines[1]) > 0 and (t2_lines[0] + t2_lines[1]) > 0 and t1_name in period_logs and t2_name in period_logs:
                         h1_t1 = t1_lines[0] + t1_lines[1]
                         h1_t2 = t2_lines[0] + t2_lines[1]
                         period_logs[t1_name]["h1_off"].append(h1_t1)
@@ -417,6 +522,8 @@ def sync_live_nba_data():
 
                         t_pts, t_reb, t_ast = 0.0, 0.0, 0.0
                         for ath in stat_blk.get("athletes", []):
+                            if ath.get("didNotPlay"):
+                                continue
                             ath_obj = ath.get("athlete", {})
                             p_disp = ath_obj.get("displayName", "")
                             pos_abbr = ath_obj.get("position", {}).get("abbreviation", "G")
@@ -425,8 +532,10 @@ def sync_live_nba_data():
                             if not p_disp or not s_vals or pts_idx == -1:
                                 continue
                             try:
-                                min_raw = str(s_vals[min_idx]).split(":")[0] if min_idx != -1 else "20"
+                                min_raw = str(s_vals[min_idx]).split(":")[0] if min_idx != -1 else "0"
                                 mins = float(min_raw) if min_raw.isdigit() else 0.0
+                                if mins <= 0.0:
+                                    continue
                                 pts = float(s_vals[pts_idx]) if pts_idx != -1 else 0.0
                                 reb = float(s_vals[reb_idx]) if reb_idx != -1 else 0.0
                                 ast = float(s_vals[ast_idx]) if ast_idx != -1 else 0.0
@@ -434,14 +543,15 @@ def sync_live_nba_data():
                                 t_reb += reb
                                 t_ast += ast
 
-                                if mins >= 12.0:
-                                    norm_p = normalize_name(p_disp)
-                                    if norm_p not in player_logs:
-                                        player_logs[norm_p] = {"PTS": [], "REB": [], "AST": [], "TEAM": t_name, "POS": p_pos_clean}
-                                    player_logs[norm_p]["PTS"].append(pts)
-                                    player_logs[norm_p]["REB"].append(reb)
-                                    player_logs[norm_p]["AST"].append(ast)
-                                    player_logs[norm_p]["TEAM"] = t_name
+                                # Record every game played (mins > 0) so season/L10 denominators match ESPN
+                                norm_p = normalize_name(p_disp)
+                                if norm_p not in player_logs:
+                                    player_logs[norm_p] = {"PTS": [], "REB": [], "AST": [], "MIN": [], "TEAM": t_name, "POS": p_pos_clean}
+                                player_logs[norm_p]["PTS"].append(pts)
+                                player_logs[norm_p]["REB"].append(reb)
+                                player_logs[norm_p]["AST"].append(ast)
+                                player_logs[norm_p]["MIN"].append(mins)
+                                player_logs[norm_p]["TEAM"] = t_name
                             except:
                                 continue
                         team_totals[t_name] = {"PTS": t_pts, "REB": t_reb, "AST": t_ast}
@@ -460,28 +570,42 @@ def sync_live_nba_data():
         except:
             continue
 
+    # Blend 50% Official Season Avg (SZN) + 50% Last 10 Games (L10)
     for norm_p, logs in player_logs.items():
-        if len(logs["PTS"]) >= 3:
-            live_pts = float(np.mean(logs["PTS"]))
-            live_reb = float(np.mean(logs["REB"]))
-            live_ast = float(np.mean(logs["AST"]))
-            if norm_p in player_db:
-                pos_val = player_db[norm_p].get("POS", logs.get("POS", "G"))
-                player_db[norm_p] = {
-                    "PTS": round(0.50 * live_pts + 0.50 * player_db[norm_p]["PTS"], 2),
-                    "REB": round(0.50 * live_reb + 0.50 * player_db[norm_p]["REB"], 2),
-                    "AST": round(0.50 * live_ast + 0.50 * player_db[norm_p]["AST"], 2),
-                    "POS": pos_val,
-                    "TEAM": logs["TEAM"]
-                }
+        if len(logs["PTS"]) >= 3 and float(np.mean(logs["MIN"])) >= 12.0:
+            full_pts = float(np.mean(logs["PTS"]))
+            full_reb = float(np.mean(logs["REB"]))
+            full_ast = float(np.mean(logs["AST"]))
+
+            l10_pts = float(np.mean(logs["PTS"][-10:]))
+            l10_reb = float(np.mean(logs["REB"][-10:]))
+            l10_ast = float(np.mean(logs["AST"][-10:]))
+
+            if norm_p in espn_season_stats:
+                szn_pts = espn_season_stats[norm_p]["PTS"]
+                szn_reb = espn_season_stats[norm_p]["REB"]
+                szn_ast = espn_season_stats[norm_p]["AST"]
+            elif norm_p in player_db and len(logs["PTS"]) < 6:
+                szn_pts = 0.50 * full_pts + 0.50 * player_db[norm_p]["SZN_PTS"]
+                szn_reb = 0.50 * full_reb + 0.50 * player_db[norm_p]["SZN_REB"]
+                szn_ast = 0.50 * full_ast + 0.50 * player_db[norm_p]["SZN_AST"]
             else:
-                player_db[norm_p] = {
-                    "PTS": round(live_pts, 2),
-                    "REB": round(live_reb, 2),
-                    "AST": round(live_ast, 2),
-                    "POS": logs.get("POS", "G"),
-                    "TEAM": logs["TEAM"]
-                }
+                szn_pts, szn_reb, szn_ast = full_pts, full_reb, full_ast
+
+            pos_val = player_db.get(norm_p, {}).get("POS", logs.get("POS", "G"))
+            player_db[norm_p] = {
+                "PTS": round(0.50 * szn_pts + 0.50 * l10_pts, 2),
+                "REB": round(0.50 * szn_reb + 0.50 * l10_reb, 2),
+                "AST": round(0.50 * szn_ast + 0.50 * l10_ast, 2),
+                "SZN_PTS": round(szn_pts, 1),
+                "SZN_REB": round(szn_reb, 1),
+                "SZN_AST": round(szn_ast, 1),
+                "L10_PTS": round(l10_pts, 1),
+                "L10_REB": round(l10_reb, 1),
+                "L10_AST": round(l10_ast, 1),
+                "POS": pos_val,
+                "TEAM": logs["TEAM"]
+            }
 
     for t_name, logs in opp_allowed_logs.items():
         if len(logs["REB"]) >= 2:
@@ -513,12 +637,13 @@ def sync_live_nba_data():
 
     save_json(LIVE_STATS_CACHE_FILE, {
         "date": today_str,
+        "schema_version": CACHE_SCHEMA_VERSION,
         "team_db": team_db,
         "player_db": player_db,
         "opp_ranks": opp_ranks,
         "b2b_teams": list(b2b_teams)
     })
-    print(f"✅ Synced {len(player_db)} players, {len(b2b_teams)} B2B teams, & 30 defensive rankings!")
+    print(f"✅ Synced {len(player_db)} players (Szn + L10), {len(b2b_teams)} B2B teams, & 30 defensive rankings!")
     return team_db, player_db, opp_ranks, b2b_teams
 
 def fetch_injured_players():
@@ -564,7 +689,7 @@ def calc_team_injury_deduction(team_name, player_db, confirmed_out):
     penalty = 0.0
     for norm_p, p_data in player_db.items():
         if p_data.get("TEAM") == team_name and norm_p in confirmed_out:
-            pts = p_data.get("PTS", 0.0)
+            pts = p_data.get("SZN_PTS", p_data.get("PTS", 0.0))
             if pts >= 12.0:
                 penalty += (pts - 8.5) * 0.18
     return min(penalty, 7.5)
@@ -848,6 +973,8 @@ def scan_all_fanduel_markets():
 
                                 p_info = player_db[norm_p]
                                 base_avg = p_info[stat_code]
+                                szn_avg = p_info.get(f"SZN_{stat_code}", base_avg)
+                                l10_avg = p_info.get(f"L10_{stat_code}", base_avg)
                                 p_pos = p_info.get("POS", "G")
                                 p_team = p_info.get("TEAM", "")
 
@@ -857,7 +984,6 @@ def scan_all_fanduel_markets():
                                 elif p_team == away:
                                     opp_s, opp_r, opp_ab_str = h_stats, h_ranks, h_ab
                                 else:
-                                    # Fallback if player team wasn't matched
                                     opp_s = {
                                         "def": (h_stats["def"] + a_stats["def"]) / 2.0,
                                         "opp_reb": (h_stats["opp_reb"] + a_stats["opp_reb"]) / 2.0,
@@ -903,7 +1029,7 @@ def scan_all_fanduel_markets():
                                     dot = get_matchup_dot(opp_def_rk, pick_dir)
                                     base_text = (
                                         f"**{p_name} — {pick_dir} {line} {stat_code}** `({juice:+d})`\n"
-                                        f"🔥 **+{ev_pct:.1f}% EV**  •  📊 Avg: **{base_avg:.1f}** *(Proj: {lambda_proj:.1f})*\n"
+                                        f"🔥 **+{ev_pct:.1f}% EV**  •  📊 Szn: **{szn_avg:.1f}** *(L10: {l10_avg:.1f} | Proj: {lambda_proj:.1f})*\n"
                                         f"{dot} vs {opp_ab_str} Def: **#{opp_def_rk}** *({opp_stat_val:.1f}/g)*  •  🏀 {a_ab}@{h_ab} *({time_short})*\n"
                                         f"{DIVIDER}"
                                     )
@@ -943,8 +1069,8 @@ def check_scores_and_grade_all_markets():
         h_pts = float(home_c.get("score", 0))
         a_pts = float(away_c.get("score", 0))
 
-        h_lines = [float(x.get("value", 0)) for x in home_c.get("linescores", [])]
-        a_lines = [float(x.get("value", 0)) for x in away_c.get("linescores", [])]
+        h_lines = [float(x.get("displayValue") or x.get("value") or 0) for x in home_c.get("linescores", [])]
+        a_lines = [float(x.get("displayValue") or x.get("value") or 0) for x in away_c.get("linescores", [])]
 
         player_stats_map = {}
         has_props = any(b["status"] == "PENDING" and b["market"] == "PLAYER_PROP" and b["home"] == h_name for b in tracked_bets)

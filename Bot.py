@@ -16,12 +16,16 @@ THE_ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY", "9ecb23956a7654b951782fd28ec3a8
 
 # Market Toggles
 SCAN_FULL_GAME = True         # Full-Game Spreads & Totals
-SCAN_HALVES_QUARTERS = True   # 1st Half & 1st Quarter
-SCAN_PLAYER_PROPS = True      # Starters & Role Players: PTS, REB, AST (Dual-Layer Defense)
+SCAN_HALVES_QUARTERS = True   # 1st Half & 1st Quarter Spreads & Totals
+SCAN_PLAYER_PROPS = True      # Starters & Role Players: PTS, REB, AST
 
 MAX_DEEP_SCAN_GAMES_PER_RUN = 8
 MIN_EDGE_TO_POST = 0.150      # STRICT 15.0% OR BETTER +EV FILTER
-LOOKBACK_DAYS_FOR_STATS = 20  # Rolling days for robust baseline data
+LOOKBACK_DAYS_FOR_STATS = 20  # Rolling days of ESPN boxscores for live stats
+
+# Minimum Prop Line Filters (Avoids Poisson micro-line traps)
+MIN_PROP_LINE_PTS = 6.5
+MIN_PROP_LINE_OTHER = 2.5
 
 TRACKER_FILE = "tracked_all_markets.json"
 SCANNED_EVENTS_FILE = "scanned_prop_events.json"
@@ -37,6 +41,7 @@ NBA_STD_DEV_H1_SPREAD = 8.8
 NBA_STD_DEV_Q1_TOTAL = 8.2
 NBA_STD_DEV_Q1_SPREAD = 6.2
 HOME_COURT_ADVANTAGE = 2.2
+SPREAD_SHRINKAGE = 0.65       # Regresses raw efficiency gaps toward mean
 
 DIVIDER = "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯"
 
@@ -107,7 +112,7 @@ def get_team_efficiency_baselines():
         "Detroit Pistons": {"off": 114.3, "def": 106.2, "pace": 99.0, "opp_reb": 42.0, "opp_ast": 24.5, "q1_off": 28.4, "q1_def": 26.6, "h1_off": 57.0, "h1_def": 53.2},
         "Boston Celtics": {"off": 119.6, "def": 108.6, "pace": 98.7, "opp_reb": 42.4, "opp_ast": 24.1, "q1_off": 30.5, "q1_def": 27.0, "h1_off": 60.8, "h1_def": 54.0},
         "Los Angeles Clippers": {"off": 111.9, "def": 116.0, "pace": 97.8, "opp_reb": 43.5, "opp_ast": 26.2, "q1_off": 27.8, "q1_def": 29.1, "h1_off": 55.8, "h1_def": 58.0},
-        "Phoenix Suns": {"off": 112.6, "def": 121.5, "pace": 99.1, "opp_reb": 45.1, "opp_ast": 27.6, "q1_off": 28.1, "q1_def": 30.2, "h1_off": 56.2, "h1_def": 60.5},
+        "Phoenix Suns": {"off": 112.6, "def": 114.5, "pace": 99.1, "opp_reb": 44.2, "opp_ast": 26.4, "q1_off": 28.1, "q1_def": 28.6, "h1_off": 56.2, "h1_def": 57.5},
         "Toronto Raptors": {"off": 116.6, "def": 114.0, "pace": 100.2, "opp_reb": 44.0, "opp_ast": 26.7, "q1_off": 29.0, "q1_def": 28.5, "h1_off": 58.2, "h1_def": 57.0},
         "Atlanta Hawks": {"off": 115.5, "def": 113.3, "pace": 101.8, "opp_reb": 45.3, "opp_ast": 27.8, "q1_off": 29.4, "q1_def": 28.6, "h1_off": 58.8, "h1_def": 56.6},
         "New York Knicks": {"off": 114.6, "def": 108.5, "pace": 96.9, "opp_reb": 40.8, "opp_ast": 24.3, "q1_off": 28.6, "q1_def": 27.1, "h1_off": 57.2, "h1_def": 54.2},
@@ -118,189 +123,210 @@ def get_team_efficiency_baselines():
         "Philadelphia 76ers": {"off": 111.3, "def": 108.3, "pace": 98.0, "opp_reb": 43.0, "opp_ast": 25.0, "q1_off": 27.8, "q1_def": 27.1, "h1_off": 55.5, "h1_def": 54.1},
         "Sacramento Kings": {"off": 108.5, "def": 121.6, "pace": 100.4, "opp_reb": 44.8, "opp_ast": 27.5, "q1_off": 27.2, "q1_def": 30.4, "h1_off": 54.2, "h1_def": 60.8},
         "Indiana Pacers": {"off": 110.4, "def": 114.3, "pace": 102.1, "opp_reb": 45.9, "opp_ast": 27.1, "q1_off": 27.6, "q1_def": 28.6, "h1_off": 55.0, "h1_def": 57.1},
-        "Orlando Magic": {"off": 108.2, "def": 117.4, "pace": 98.3, "opp_reb": 41.9, "opp_ast": 24.6, "q1_off": 27.0, "q1_def": 29.4, "h1_off": 54.0, "h1_def": 58.7},
-        "Washington Wizards": {"off": 109.0, "def": 114.2, "pace": 101.5, "opp_reb": 47.4, "opp_ast": 28.9, "q1_off": 27.4, "q1_def": 28.6, "h1_off": 54.6, "h1_def": 57.1},
+        "Orlando Magic": {"off": 108.2, "def": 114.6, "pace": 98.3, "opp_reb": 41.9, "opp_ast": 24.6, "q1_off": 27.0, "q1_def": 28.6, "h1_off": 54.0, "h1_def": 57.3},
+        "Washington Wizards": {"off": 109.0, "def": 118.2, "pace": 101.5, "opp_reb": 47.4, "opp_ast": 28.9, "q1_off": 27.4, "q1_def": 29.6, "h1_off": 54.6, "h1_def": 59.1},
         "Brooklyn Nets": {"off": 106.3, "def": 115.3, "pace": 97.6, "opp_reb": 44.5, "opp_ast": 26.4, "q1_off": 26.6, "q1_def": 28.8, "h1_off": 53.1, "h1_def": 57.6},
-        "Milwaukee Bucks": {"off": 108.6, "def": 121.9, "pace": 99.3, "opp_reb": 45.2, "opp_ast": 27.2, "q1_off": 27.2, "q1_def": 30.5, "h1_off": 54.2, "h1_def": 61.0},
-        "Charlotte Hornets": {"off": 103.5, "def": 115.6, "pace": 98.8, "opp_reb": 44.7, "opp_ast": 26.9, "q1_off": 25.9, "q1_def": 28.9, "h1_off": 51.8, "h1_def": 57.8},
-        "Chicago Bulls": {"off": 108.6, "def": 124.6, "pace": 100.7, "opp_reb": 46.5, "opp_ast": 28.2, "q1_off": 27.2, "q1_def": 31.2, "h1_off": 54.2, "h1_def": 62.3}
+        "Milwaukee Bucks": {"off": 108.6, "def": 118.9, "pace": 99.3, "opp_reb": 45.2, "opp_ast": 27.2, "q1_off": 27.2, "q1_def": 29.8, "h1_off": 54.2, "h1_def": 59.5},
+        "Charlotte Hornets": {"off": 106.5, "def": 114.6, "pace": 98.8, "opp_reb": 44.7, "opp_ast": 26.9, "q1_off": 26.6, "q1_def": 28.6, "h1_off": 53.2, "h1_def": 57.3},
+        "Chicago Bulls": {"off": 108.6, "def": 121.6, "pace": 100.7, "opp_reb": 46.5, "opp_ast": 28.2, "q1_off": 27.2, "q1_def": 30.4, "h1_off": 54.2, "h1_def": 60.8}
     }
 
 def get_fallback_player_baselines():
     raw_baselines = {
-        "Jayson Tatum": {"PTS": 28.4, "REB": 8.5, "AST": 5.4, "POS": "F"},
-        "Jaylen Brown": {"PTS": 25.2, "REB": 6.1, "AST": 4.2, "POS": "G"},
-        "Derrick White": {"PTS": 16.8, "REB": 4.3, "AST": 5.1, "POS": "G"},
-        "Jrue Holiday": {"PTS": 12.8, "REB": 4.8, "AST": 4.6, "POS": "G"},
-        "Kristaps Porzingis": {"PTS": 19.5, "REB": 7.1, "AST": 2.0, "POS": "C"},
-        "Payton Pritchard": {"PTS": 13.4, "REB": 3.2, "AST": 3.8, "POS": "G"},
-        "Al Horford": {"PTS": 8.6, "REB": 6.2, "AST": 2.6, "POS": "C"},
-        "Jalen Brunson": {"PTS": 27.9, "REB": 3.6, "AST": 6.8, "POS": "G"},
-        "Karl-Anthony Towns": {"PTS": 24.5, "REB": 11.8, "AST": 3.1, "POS": "C"},
-        "Mikal Bridges": {"PTS": 17.8, "REB": 3.9, "AST": 3.4, "POS": "F"},
-        "OG Anunoby": {"PTS": 16.4, "REB": 5.1, "AST": 2.2, "POS": "F"},
-        "Josh Hart": {"PTS": 13.2, "REB": 8.6, "AST": 5.2, "POS": "G"},
-        "Miles McBride": {"PTS": 10.4, "REB": 2.1, "AST": 2.4, "POS": "G"},
-        "Shai Gilgeous-Alexander": {"PTS": 31.2, "REB": 5.6, "AST": 6.4, "POS": "G"},
-        "Jalen Williams": {"PTS": 21.4, "REB": 5.4, "AST": 5.1, "POS": "F"},
-        "Chet Holmgren": {"PTS": 18.2, "REB": 8.8, "AST": 2.6, "POS": "C"},
-        "Lu Dort": {"PTS": 10.8, "REB": 3.8, "AST": 1.6, "POS": "G"},
-        "Isaiah Hartenstein": {"PTS": 11.4, "REB": 10.8, "AST": 3.6, "POS": "C"},
-        "Alex Caruso": {"PTS": 7.8, "REB": 3.2, "AST": 2.8, "POS": "G"},
-        "Cason Wallace": {"PTS": 8.4, "REB": 2.8, "AST": 2.1, "POS": "G"},
-        "Aaron Wiggins": {"PTS": 9.8, "REB": 3.4, "AST": 1.5, "POS": "G"},
-        "Damian Lillard": {"PTS": 20.4, "REB": 3.8, "AST": 4.9, "POS": "G"},
-        "Anfernee Simons": {"PTS": 19.6, "REB": 3.1, "AST": 4.8, "POS": "G"},
-        "Jerami Grant": {"PTS": 18.4, "REB": 4.1, "AST": 2.4, "POS": "F"},
-        "Deandre Ayton": {"PTS": 14.8, "REB": 10.4, "AST": 1.6, "POS": "C"},
-        "Scoot Henderson": {"PTS": 13.6, "REB": 3.2, "AST": 5.4, "POS": "G"},
-        "Shaedon Sharpe": {"PTS": 16.2, "REB": 4.4, "AST": 2.6, "POS": "G"},
-        "Deni Avdija": {"PTS": 13.8, "REB": 6.6, "AST": 3.6, "POS": "F"},
-        "Toumani Camara": {"PTS": 9.6, "REB": 5.8, "AST": 1.8, "POS": "F"},
-        "Donovan Clingan": {"PTS": 7.8, "REB": 7.4, "AST": 1.2, "POS": "C"},
-        "Stephen Curry": {"PTS": 26.4, "REB": 4.5, "AST": 5.2, "POS": "G"},
-        "Draymond Green": {"PTS": 8.8, "REB": 6.8, "AST": 6.2, "POS": "F"},
-        "Andrew Wiggins": {"PTS": 16.4, "REB": 4.8, "AST": 2.1, "POS": "F"},
-        "Jonathan Kuminga": {"PTS": 15.8, "REB": 4.6, "AST": 2.2, "POS": "F"},
-        "Buddy Hield": {"PTS": 14.6, "REB": 3.4, "AST": 2.1, "POS": "G"},
-        "Brandin Podziemski": {"PTS": 10.2, "REB": 5.1, "AST": 4.2, "POS": "G"},
-        "Trayce Jackson-Davis": {"PTS": 8.9, "REB": 6.4, "AST": 1.8, "POS": "C"},
-        "Kevin Durant": {"PTS": 27.4, "REB": 6.6, "AST": 4.8, "POS": "F"},
-        "Alperen Sengun": {"PTS": 21.6, "REB": 11.2, "AST": 5.1, "POS": "C"},
-        "Jalen Green": {"PTS": 22.4, "REB": 4.8, "AST": 3.4, "POS": "G"},
-        "Fred VanVleet": {"PTS": 15.8, "REB": 4.1, "AST": 6.8, "POS": "G"},
-        "Jabari Smith Jr": {"PTS": 13.6, "REB": 7.8, "AST": 1.6, "POS": "F"},
-        "Dillon Brooks": {"PTS": 12.4, "REB": 3.8, "AST": 1.6, "POS": "G"},
-        "Amen Thompson": {"PTS": 11.8, "REB": 7.2, "AST": 3.4, "POS": "G"},
-        "Tari Eason": {"PTS": 11.2, "REB": 6.4, "AST": 1.4, "POS": "F"},
-        "Paolo Banchero": {"PTS": 25.8, "REB": 7.6, "AST": 5.4, "POS": "F"},
-        "Franz Wagner": {"PTS": 24.8, "REB": 5.7, "AST": 4.6, "POS": "F"},
-        "Jalen Suggs": {"PTS": 15.6, "REB": 4.2, "AST": 3.8, "POS": "G"},
-        "Wendell Carter Jr": {"PTS": 10.8, "REB": 8.4, "AST": 2.1, "POS": "C"},
-        "Kentavious Caldwell-Pope": {"PTS": 9.4, "REB": 2.4, "AST": 1.9, "POS": "G"},
-        "Cole Anthony": {"PTS": 11.2, "REB": 3.6, "AST": 3.2, "POS": "G"},
-        "Moritz Wagner": {"PTS": 10.6, "REB": 4.8, "AST": 1.4, "POS": "C"},
-        "Anthony Black": {"PTS": 8.4, "REB": 3.1, "AST": 3.6, "POS": "G"},
-        "Lauri Markkanen": {"PTS": 23.6, "REB": 8.2, "AST": 2.1, "POS": "F"},
-        "Keyonte George": {"PTS": 16.4, "REB": 3.4, "AST": 5.8, "POS": "G"},
-        "Collin Sexton": {"PTS": 17.8, "REB": 2.8, "AST": 4.4, "POS": "G"},
-        "John Collins": {"PTS": 16.2, "REB": 8.4, "AST": 2.1, "POS": "F"},
-        "Walker Kessler": {"PTS": 10.4, "REB": 10.8, "AST": 1.4, "POS": "C"},
-        "Jordan Clarkson": {"PTS": 15.4, "REB": 3.2, "AST": 3.8, "POS": "G"},
-        "LeBron James": {"PTS": 24.2, "REB": 7.4, "AST": 8.9, "POS": "F"},
-        "Anthony Davis": {"PTS": 26.8, "REB": 12.4, "AST": 3.6, "POS": "C"},
-        "Austin Reaves": {"PTS": 17.6, "REB": 4.2, "AST": 5.4, "POS": "G"},
-        "Rui Hachimura": {"PTS": 13.4, "REB": 5.2, "AST": 1.4, "POS": "F"},
-        "D'Angelo Russell": {"PTS": 14.2, "REB": 2.8, "AST": 5.6, "POS": "G"},
-        "Dalton Knecht": {"PTS": 11.4, "REB": 3.2, "AST": 1.4, "POS": "G"},
-        "James Harden": {"PTS": 21.4, "REB": 5.8, "AST": 8.9, "POS": "G"},
-        "Norman Powell": {"PTS": 22.6, "REB": 3.4, "AST": 2.4, "POS": "G"},
-        "Ivica Zubac": {"PTS": 15.8, "REB": 12.2, "AST": 2.4, "POS": "C"},
-        "Derrick Jones Jr": {"PTS": 10.2, "REB": 3.6, "AST": 1.1, "POS": "F"},
-        "Terance Mann": {"PTS": 8.4, "REB": 3.4, "AST": 2.1, "POS": "G"},
-        "Nikola Jokic": {"PTS": 29.1, "REB": 13.2, "AST": 10.4, "POS": "C"},
-        "Jamal Murray": {"PTS": 21.8, "REB": 4.1, "AST": 6.5, "POS": "G"},
-        "Michael Porter Jr": {"PTS": 18.2, "REB": 7.1, "AST": 2.4, "POS": "F"},
-        "Aaron Gordon": {"PTS": 14.6, "REB": 6.4, "AST": 3.2, "POS": "F"},
-        "Christian Braun": {"PTS": 13.8, "REB": 5.1, "AST": 2.2, "POS": "G"},
-        "Russell Westbrook": {"PTS": 11.4, "REB": 4.6, "AST": 5.8, "POS": "G"},
-        "Luka Doncic": {"PTS": 34.5, "REB": 9.1, "AST": 9.6, "POS": "G"},
-        "Kyrie Irving": {"PTS": 25.4, "REB": 4.9, "AST": 5.3, "POS": "G"},
-        "Klay Thompson": {"PTS": 14.2, "REB": 3.4, "AST": 2.0, "POS": "G"},
-        "PJ Washington": {"PTS": 12.4, "REB": 7.6, "AST": 1.9, "POS": "F"},
-        "Daniel Gafford": {"PTS": 11.8, "REB": 7.2, "AST": 1.4, "POS": "C"},
-        "Dereck Lively II": {"PTS": 9.4, "REB": 7.8, "AST": 2.1, "POS": "C"},
-        "Anthony Edwards": {"PTS": 28.1, "REB": 5.8, "AST": 5.1, "POS": "G"},
-        "Julius Randle": {"PTS": 21.2, "REB": 7.4, "AST": 4.6, "POS": "F"},
-        "Rudy Gobert": {"PTS": 11.4, "REB": 11.2, "AST": 1.6, "POS": "C"},
-        "Naz Reid": {"PTS": 14.4, "REB": 5.6, "AST": 1.8, "POS": "C"},
-        "Jaden McDaniels": {"PTS": 10.6, "REB": 4.1, "AST": 1.6, "POS": "F"},
-        "Donte DiVincenzo": {"PTS": 11.8, "REB": 3.8, "AST": 3.4, "POS": "G"},
-        "Mike Conley": {"PTS": 9.2, "REB": 2.8, "AST": 5.4, "POS": "G"},
-        "Terance Shannon Jr": {"PTS": 11.1, "REB": 3.5, "AST": 2.6, "POS": "G"},
-        "Devin Booker": {"PTS": 27.8, "REB": 4.6, "AST": 6.9, "POS": "G"},
-        "Bradley Beal": {"PTS": 17.8, "REB": 4.1, "AST": 4.6, "POS": "G"},
-        "Jusuf Nurkic": {"PTS": 9.6, "REB": 9.8, "AST": 2.8, "POS": "C"},
-        "Tyus Jones": {"PTS": 10.4, "REB": 2.8, "AST": 6.4, "POS": "G"},
-        "Grayson Allen": {"PTS": 11.6, "REB": 3.2, "AST": 2.4, "POS": "G"},
-        "Victor Wembanyama": {"PTS": 26.8, "REB": 11.2, "AST": 4.1, "POS": "C"},
-        "De'Aaron Fox": {"PTS": 24.6, "REB": 4.6, "AST": 6.1, "POS": "G"},
-        "Devin Vassell": {"PTS": 17.6, "REB": 3.8, "AST": 3.6, "POS": "G"},
-        "Jeremy Sochan": {"PTS": 13.8, "REB": 7.8, "AST": 3.2, "POS": "F"},
-        "Chris Paul": {"PTS": 9.8, "REB": 3.8, "AST": 8.2, "POS": "G"},
-        "Harrison Barnes": {"PTS": 11.4, "REB": 4.4, "AST": 1.8, "POS": "F"},
-        "Stephon Castle": {"PTS": 11.2, "REB": 3.2, "AST": 3.8, "POS": "G"},
-        "Domantas Sabonis": {"PTS": 19.8, "REB": 14.1, "AST": 7.8, "POS": "C"},
-        "DeMar DeRozan": {"PTS": 22.8, "REB": 4.2, "AST": 4.4, "POS": "F"},
-        "Keegan Murray": {"PTS": 13.8, "REB": 7.2, "AST": 1.8, "POS": "F"},
-        "Malik Monk": {"PTS": 15.2, "REB": 3.2, "AST": 4.8, "POS": "G"},
-        "Ja Morant": {"PTS": 25.4, "REB": 5.1, "AST": 8.4, "POS": "G"},
-        "Jaren Jackson Jr": {"PTS": 22.4, "REB": 6.1, "AST": 1.8, "POS": "F"},
-        "Desmond Bane": {"PTS": 19.8, "REB": 4.6, "AST": 4.8, "POS": "G"},
-        "Santi Aldama": {"PTS": 12.6, "REB": 6.8, "AST": 2.4, "POS": "F"},
-        "Scotty Pippen Jr": {"PTS": 11.4, "REB": 3.8, "AST": 5.6, "POS": "G"},
-        "Zach Edey": {"PTS": 10.8, "REB": 7.6, "AST": 1.0, "POS": "C"},
-        "Giannis Antetokounmpo": {"PTS": 30.8, "REB": 11.6, "AST": 6.1, "POS": "F"},
-        "Bobby Portis": {"PTS": 13.4, "REB": 7.8, "AST": 1.4, "POS": "F"},
-        "Brook Lopez": {"PTS": 11.8, "REB": 5.2, "AST": 1.6, "POS": "C"},
-        "Gary Trent Jr": {"PTS": 11.2, "REB": 2.6, "AST": 1.6, "POS": "G"},
-        "Donovan Mitchell": {"PTS": 27.2, "REB": 4.4, "AST": 5.2, "POS": "G"},
-        "Darius Garland": {"PTS": 20.4, "REB": 2.8, "AST": 6.6, "POS": "G"},
-        "Evan Mobley": {"PTS": 18.2, "REB": 9.2, "AST": 2.8, "POS": "C"},
-        "Jarrett Allen": {"PTS": 14.6, "REB": 10.8, "AST": 2.1, "POS": "C"},
-        "Caris LeVert": {"PTS": 11.8, "REB": 3.4, "AST": 4.2, "POS": "G"},
-        "Tyrese Maxey": {"PTS": 27.6, "REB": 3.8, "AST": 6.4, "POS": "G"},
-        "Joel Embiid": {"PTS": 26.8, "REB": 10.4, "AST": 4.8, "POS": "C"},
-        "Paul George": {"PTS": 18.6, "REB": 5.6, "AST": 4.4, "POS": "F"},
-        "Kelly Oubre Jr": {"PTS": 13.8, "REB": 4.8, "AST": 1.6, "POS": "F"},
-        "Jared McCain": {"PTS": 15.2, "REB": 2.6, "AST": 2.8, "POS": "G"},
-        "Bam Adebayo": {"PTS": 20.2, "REB": 10.4, "AST": 4.1, "POS": "C"},
-        "Tyler Herro": {"PTS": 23.4, "REB": 5.2, "AST": 4.8, "POS": "G"},
-        "Jimmy Butler": {"PTS": 18.8, "REB": 5.4, "AST": 4.8, "POS": "F"},
-        "Terry Rozier": {"PTS": 13.4, "REB": 3.8, "AST": 4.2, "POS": "G"},
-        "Jaime Jaquez Jr": {"PTS": 10.8, "REB": 4.8, "AST": 2.4, "POS": "F"},
-        "Tyrese Haliburton": {"PTS": 21.4, "REB": 3.9, "AST": 10.4, "POS": "G"},
-        "Pascal Siakam": {"PTS": 20.6, "REB": 7.2, "AST": 3.8, "POS": "F"},
-        "Myles Turner": {"PTS": 15.8, "REB": 7.1, "AST": 1.6, "POS": "C"},
-        "Bennedict Mathurin": {"PTS": 16.8, "REB": 5.8, "AST": 2.0, "POS": "G"},
-        "Andrew Nembhard": {"PTS": 10.8, "REB": 3.1, "AST": 4.8, "POS": "G"},
-        "TJ McConnell": {"PTS": 10.2, "REB": 2.6, "AST": 5.2, "POS": "G"},
-        "Trae Young": {"PTS": 26.2, "REB": 3.1, "AST": 11.2, "POS": "G"},
-        "Jalen Johnson": {"PTS": 19.6, "REB": 10.1, "AST": 5.2, "POS": "F"},
-        "Dyson Daniels": {"PTS": 13.8, "REB": 5.1, "AST": 3.6, "POS": "G"},
-        "Clint Capela": {"PTS": 10.4, "REB": 9.2, "AST": 1.2, "POS": "C"},
-        "Onyeka Okongwu": {"PTS": 11.2, "REB": 6.8, "AST": 1.6, "POS": "C"},
-        "Zaccharie Risacher": {"PTS": 11.6, "REB": 3.8, "AST": 1.4, "POS": "F"},
-        "Cade Cunningham": {"PTS": 24.6, "REB": 6.4, "AST": 9.1, "POS": "G"},
-        "Jaden Ivey": {"PTS": 17.8, "REB": 4.2, "AST": 4.2, "POS": "G"},
-        "Tobias Harris": {"PTS": 13.8, "REB": 6.8, "AST": 2.4, "POS": "F"},
-        "Jalen Duren": {"PTS": 10.6, "REB": 10.2, "AST": 2.4, "POS": "C"},
-        "Malik Beasley": {"PTS": 15.4, "REB": 3.1, "AST": 1.8, "POS": "G"},
-        "LaMelo Ball": {"PTS": 26.9, "REB": 5.4, "AST": 8.2, "POS": "G"},
-        "Brandon Miller": {"PTS": 21.2, "REB": 5.2, "AST": 3.6, "POS": "F"},
-        "Miles Bridges": {"PTS": 17.4, "REB": 6.8, "AST": 3.1, "POS": "F"},
-        "Zach LaVine": {"PTS": 23.4, "REB": 4.8, "AST": 4.1, "POS": "G"},
-        "Nikola Vucevic": {"PTS": 18.2, "REB": 10.8, "AST": 3.4, "POS": "C"},
-        "Coby White": {"PTS": 19.4, "REB": 4.2, "AST": 4.8, "POS": "G"},
-        "Josh Giddey": {"PTS": 13.2, "REB": 6.8, "AST": 6.9, "POS": "G"},
-        "Ayo Dosunmu": {"PTS": 12.4, "REB": 3.6, "AST": 3.8, "POS": "G"},
-        "Scottie Barnes": {"PTS": 20.8, "REB": 8.2, "AST": 6.4, "POS": "F"},
-        "RJ Barrett": {"PTS": 22.6, "REB": 6.2, "AST": 5.8, "POS": "F"},
-        "Immanuel Quickley": {"PTS": 17.4, "REB": 3.8, "AST": 6.4, "POS": "G"},
-        "Jakob Poeltl": {"PTS": 15.2, "REB": 11.4, "AST": 2.6, "POS": "C"},
-        "Gradey Dick": {"PTS": 16.8, "REB": 3.4, "AST": 2.1, "POS": "G"},
-        "Cam Thomas": {"PTS": 24.2, "REB": 3.4, "AST": 3.4, "POS": "G"},
-        "Dennis Schroder": {"PTS": 17.8, "REB": 3.1, "AST": 6.4, "POS": "G"},
-        "Cameron Johnson": {"PTS": 18.2, "REB": 4.4, "AST": 2.9, "POS": "F"},
-        "Nic Claxton": {"PTS": 10.4, "REB": 8.4, "AST": 2.2, "POS": "C"},
-        "Jordan Poole": {"PTS": 20.2, "REB": 2.6, "AST": 4.8, "POS": "G"},
-        "Kyle Kuzma": {"PTS": 17.8, "REB": 6.2, "AST": 3.2, "POS": "F"},
-        "Alex Sarr": {"PTS": 10.8, "REB": 6.6, "AST": 2.1, "POS": "C"},
-        "Bilal Coulibaly": {"PTS": 13.4, "REB": 5.4, "AST": 2.8, "POS": "F"},
-        "Jonas Valanciunas": {"PTS": 12.2, "REB": 8.1, "AST": 2.2, "POS": "C"},
-        "Brandon Ingram": {"PTS": 22.8, "REB": 5.6, "AST": 5.2, "POS": "F"},
-        "Trey Murphy III": {"PTS": 18.4, "REB": 4.8, "AST": 2.6, "POS": "F"},
-        "Yves Missi": {"PTS": 9.2, "REB": 8.4, "AST": 1.4, "POS": "C"}
+        # Boston Celtics
+        "Jayson Tatum": {"PTS": 28.4, "REB": 8.5, "AST": 5.4, "POS": "F", "TEAM": "Boston Celtics"},
+        "Jaylen Brown": {"PTS": 25.2, "REB": 6.1, "AST": 4.2, "POS": "G", "TEAM": "Boston Celtics"},
+        "Derrick White": {"PTS": 16.8, "REB": 4.3, "AST": 5.1, "POS": "G", "TEAM": "Boston Celtics"},
+        "Jrue Holiday": {"PTS": 12.8, "REB": 4.8, "AST": 4.6, "POS": "G", "TEAM": "Boston Celtics"},
+        "Kristaps Porzingis": {"PTS": 19.5, "REB": 7.1, "AST": 2.0, "POS": "C", "TEAM": "Boston Celtics"},
+        "Payton Pritchard": {"PTS": 13.4, "REB": 3.2, "AST": 3.8, "POS": "G", "TEAM": "Boston Celtics"},
+        "Al Horford": {"PTS": 8.6, "REB": 6.2, "AST": 2.6, "POS": "C", "TEAM": "Boston Celtics"},
+        # New York Knicks
+        "Jalen Brunson": {"PTS": 27.9, "REB": 3.6, "AST": 6.8, "POS": "G", "TEAM": "New York Knicks"},
+        "Karl-Anthony Towns": {"PTS": 24.5, "REB": 11.8, "AST": 3.1, "POS": "C", "TEAM": "New York Knicks"},
+        "Mikal Bridges": {"PTS": 17.8, "REB": 3.9, "AST": 3.4, "POS": "F", "TEAM": "New York Knicks"},
+        "OG Anunoby": {"PTS": 16.4, "REB": 5.1, "AST": 2.2, "POS": "F", "TEAM": "New York Knicks"},
+        "Josh Hart": {"PTS": 13.2, "REB": 8.6, "AST": 5.2, "POS": "G", "TEAM": "New York Knicks"},
+        "Miles McBride": {"PTS": 10.4, "REB": 2.1, "AST": 2.4, "POS": "G", "TEAM": "New York Knicks"},
+        # Oklahoma City Thunder
+        "Shai Gilgeous-Alexander": {"PTS": 31.2, "REB": 5.6, "AST": 6.4, "POS": "G", "TEAM": "Oklahoma City Thunder"},
+        "Jalen Williams": {"PTS": 21.4, "REB": 5.4, "AST": 5.1, "POS": "F", "TEAM": "Oklahoma City Thunder"},
+        "Chet Holmgren": {"PTS": 18.2, "REB": 8.8, "AST": 2.6, "POS": "C", "TEAM": "Oklahoma City Thunder"},
+        "Lu Dort": {"PTS": 10.8, "REB": 3.8, "AST": 1.6, "POS": "G", "TEAM": "Oklahoma City Thunder"},
+        "Isaiah Hartenstein": {"PTS": 11.4, "REB": 10.8, "AST": 3.6, "POS": "C", "TEAM": "Oklahoma City Thunder"},
+        "Alex Caruso": {"PTS": 7.8, "REB": 3.2, "AST": 2.8, "POS": "G", "TEAM": "Oklahoma City Thunder"},
+        "Cason Wallace": {"PTS": 8.4, "REB": 2.8, "AST": 2.1, "POS": "G", "TEAM": "Oklahoma City Thunder"},
+        "Aaron Wiggins": {"PTS": 9.8, "REB": 3.4, "AST": 1.5, "POS": "G", "TEAM": "Oklahoma City Thunder"},
+        # Portland Trail Blazers
+        "Damian Lillard": {"PTS": 20.4, "REB": 3.8, "AST": 4.9, "POS": "G", "TEAM": "Portland Trail Blazers"},
+        "Anfernee Simons": {"PTS": 19.6, "REB": 3.1, "AST": 4.8, "POS": "G", "TEAM": "Portland Trail Blazers"},
+        "Jerami Grant": {"PTS": 18.4, "REB": 4.1, "AST": 2.4, "POS": "F", "TEAM": "Portland Trail Blazers"},
+        "Deandre Ayton": {"PTS": 14.8, "REB": 10.4, "AST": 1.6, "POS": "C", "TEAM": "Portland Trail Blazers"},
+        "Scoot Henderson": {"PTS": 13.6, "REB": 3.2, "AST": 5.4, "POS": "G", "TEAM": "Portland Trail Blazers"},
+        "Shaedon Sharpe": {"PTS": 16.2, "REB": 4.4, "AST": 2.6, "POS": "G", "TEAM": "Portland Trail Blazers"},
+        "Deni Avdija": {"PTS": 13.8, "REB": 6.6, "AST": 3.6, "POS": "F", "TEAM": "Portland Trail Blazers"},
+        "Toumani Camara": {"PTS": 9.6, "REB": 5.8, "AST": 1.8, "POS": "F", "TEAM": "Portland Trail Blazers"},
+        "Donovan Clingan": {"PTS": 7.8, "REB": 7.4, "AST": 1.2, "POS": "C", "TEAM": "Portland Trail Blazers"},
+        # Golden State Warriors
+        "Stephen Curry": {"PTS": 26.4, "REB": 4.5, "AST": 5.2, "POS": "G", "TEAM": "Golden State Warriors"},
+        "Draymond Green": {"PTS": 8.8, "REB": 6.8, "AST": 6.2, "POS": "F", "TEAM": "Golden State Warriors"},
+        "Andrew Wiggins": {"PTS": 16.4, "REB": 4.8, "AST": 2.1, "POS": "F", "TEAM": "Golden State Warriors"},
+        "Jonathan Kuminga": {"PTS": 15.8, "REB": 4.6, "AST": 2.2, "POS": "F", "TEAM": "Golden State Warriors"},
+        "Buddy Hield": {"PTS": 14.6, "REB": 3.4, "AST": 2.1, "POS": "G", "TEAM": "Golden State Warriors"},
+        "Brandin Podziemski": {"PTS": 10.2, "REB": 5.1, "AST": 4.2, "POS": "G", "TEAM": "Golden State Warriors"},
+        "Trayce Jackson-Davis": {"PTS": 8.9, "REB": 6.4, "AST": 1.8, "POS": "C", "TEAM": "Golden State Warriors"},
+        # Houston Rockets
+        "Kevin Durant": {"PTS": 27.4, "REB": 6.6, "AST": 4.8, "POS": "F", "TEAM": "Houston Rockets"},
+        "Alperen Sengun": {"PTS": 21.6, "REB": 11.2, "AST": 5.1, "POS": "C", "TEAM": "Houston Rockets"},
+        "Jalen Green": {"PTS": 22.4, "REB": 4.8, "AST": 3.4, "POS": "G", "TEAM": "Houston Rockets"},
+        "Fred VanVleet": {"PTS": 15.8, "REB": 4.1, "AST": 6.8, "POS": "G", "TEAM": "Houston Rockets"},
+        "Jabari Smith Jr": {"PTS": 13.6, "REB": 7.8, "AST": 1.6, "POS": "F", "TEAM": "Houston Rockets"},
+        "Dillon Brooks": {"PTS": 12.4, "REB": 3.8, "AST": 1.6, "POS": "G", "TEAM": "Houston Rockets"},
+        "Amen Thompson": {"PTS": 11.8, "REB": 7.2, "AST": 3.4, "POS": "G", "TEAM": "Houston Rockets"},
+        "Tari Eason": {"PTS": 11.2, "REB": 6.4, "AST": 1.4, "POS": "F", "TEAM": "Houston Rockets"},
+        # Orlando Magic
+        "Paolo Banchero": {"PTS": 25.8, "REB": 7.6, "AST": 5.4, "POS": "F", "TEAM": "Orlando Magic"},
+        "Franz Wagner": {"PTS": 24.8, "REB": 5.7, "AST": 4.6, "POS": "F", "TEAM": "Orlando Magic"},
+        "Jalen Suggs": {"PTS": 15.6, "REB": 4.2, "AST": 3.8, "POS": "G", "TEAM": "Orlando Magic"},
+        "Wendell Carter Jr": {"PTS": 10.8, "REB": 8.4, "AST": 2.1, "POS": "C", "TEAM": "Orlando Magic"},
+        "Kentavious Caldwell-Pope": {"PTS": 9.4, "REB": 2.4, "AST": 1.9, "POS": "G", "TEAM": "Orlando Magic"},
+        "Cole Anthony": {"PTS": 11.2, "REB": 3.6, "AST": 3.2, "POS": "G", "TEAM": "Orlando Magic"},
+        "Moritz Wagner": {"PTS": 10.6, "REB": 4.8, "AST": 1.4, "POS": "C", "TEAM": "Orlando Magic"},
+        "Anthony Black": {"PTS": 8.4, "REB": 3.1, "AST": 3.6, "POS": "G", "TEAM": "Orlando Magic"},
+        # Utah Jazz
+        "Lauri Markkanen": {"PTS": 23.6, "REB": 8.2, "AST": 2.1, "POS": "F", "TEAM": "Utah Jazz"},
+        "Keyonte George": {"PTS": 16.4, "REB": 3.4, "AST": 5.8, "POS": "G", "TEAM": "Utah Jazz"},
+        "Collin Sexton": {"PTS": 17.8, "REB": 2.8, "AST": 4.4, "POS": "G", "TEAM": "Utah Jazz"},
+        "John Collins": {"PTS": 16.2, "REB": 8.4, "AST": 2.1, "POS": "F", "TEAM": "Utah Jazz"},
+        "Walker Kessler": {"PTS": 10.4, "REB": 10.8, "AST": 1.4, "POS": "C", "TEAM": "Utah Jazz"},
+        "Jordan Clarkson": {"PTS": 15.4, "REB": 3.2, "AST": 3.8, "POS": "G", "TEAM": "Utah Jazz"},
+        # Los Angeles Lakers & Clippers
+        "LeBron James": {"PTS": 24.2, "REB": 7.4, "AST": 8.9, "POS": "F", "TEAM": "Los Angeles Lakers"},
+        "Anthony Davis": {"PTS": 26.8, "REB": 12.4, "AST": 3.6, "POS": "C", "TEAM": "Washington Wizards"},
+        "Austin Reaves": {"PTS": 17.6, "REB": 4.2, "AST": 5.4, "POS": "G", "TEAM": "Los Angeles Lakers"},
+        "Rui Hachimura": {"PTS": 13.4, "REB": 5.2, "AST": 1.4, "POS": "F", "TEAM": "Los Angeles Lakers"},
+        "D'Angelo Russell": {"PTS": 14.2, "REB": 2.8, "AST": 5.6, "POS": "G", "TEAM": "Los Angeles Lakers"},
+        "Dalton Knecht": {"PTS": 11.4, "REB": 3.2, "AST": 1.4, "POS": "G", "TEAM": "Los Angeles Lakers"},
+        "James Harden": {"PTS": 21.4, "REB": 5.8, "AST": 8.9, "POS": "G", "TEAM": "Cleveland Cavaliers"},
+        "Norman Powell": {"PTS": 22.6, "REB": 3.4, "AST": 2.4, "POS": "G", "TEAM": "Los Angeles Clippers"},
+        "Ivica Zubac": {"PTS": 15.8, "REB": 12.2, "AST": 2.4, "POS": "C", "TEAM": "Los Angeles Clippers"},
+        "Derrick Jones Jr": {"PTS": 10.2, "REB": 3.6, "AST": 1.1, "POS": "F", "TEAM": "Los Angeles Clippers"},
+        "Terance Mann": {"PTS": 8.4, "REB": 3.4, "AST": 2.1, "POS": "G", "TEAM": "Los Angeles Clippers"},
+        # Denver, Dallas, Minnesota
+        "Nikola Jokic": {"PTS": 29.1, "REB": 13.2, "AST": 10.4, "POS": "C", "TEAM": "Denver Nuggets"},
+        "Jamal Murray": {"PTS": 21.8, "REB": 4.1, "AST": 6.5, "POS": "G", "TEAM": "Denver Nuggets"},
+        "Michael Porter Jr": {"PTS": 18.2, "REB": 7.1, "AST": 2.4, "POS": "F", "TEAM": "Denver Nuggets"},
+        "Aaron Gordon": {"PTS": 14.6, "REB": 6.4, "AST": 3.2, "POS": "F", "TEAM": "Denver Nuggets"},
+        "Christian Braun": {"PTS": 13.8, "REB": 5.1, "AST": 2.2, "POS": "G", "TEAM": "Denver Nuggets"},
+        "Russell Westbrook": {"PTS": 11.4, "REB": 4.6, "AST": 5.8, "POS": "G", "TEAM": "Denver Nuggets"},
+        "Luka Doncic": {"PTS": 34.5, "REB": 9.1, "AST": 9.6, "POS": "G", "TEAM": "Los Angeles Lakers"},
+        "Kyrie Irving": {"PTS": 25.4, "REB": 4.9, "AST": 5.3, "POS": "G", "TEAM": "Dallas Mavericks"},
+        "Klay Thompson": {"PTS": 14.2, "REB": 3.4, "AST": 2.0, "POS": "G", "TEAM": "Dallas Mavericks"},
+        "PJ Washington": {"PTS": 12.4, "REB": 7.6, "AST": 1.9, "POS": "F", "TEAM": "Dallas Mavericks"},
+        "Daniel Gafford": {"PTS": 11.8, "REB": 7.2, "AST": 1.4, "POS": "C", "TEAM": "Dallas Mavericks"},
+        "Dereck Lively II": {"PTS": 9.4, "REB": 7.8, "AST": 2.1, "POS": "C", "TEAM": "Dallas Mavericks"},
+        "Caleb Martin": {"PTS": 10.4, "REB": 4.2, "AST": 2.2, "POS": "F", "TEAM": "Dallas Mavericks"},
+        "Anthony Edwards": {"PTS": 28.1, "REB": 5.8, "AST": 5.1, "POS": "G", "TEAM": "Minnesota Timberwolves"},
+        "Julius Randle": {"PTS": 21.2, "REB": 7.4, "AST": 4.6, "POS": "F", "TEAM": "Minnesota Timberwolves"},
+        "Rudy Gobert": {"PTS": 11.4, "REB": 11.2, "AST": 1.6, "POS": "C", "TEAM": "Minnesota Timberwolves"},
+        "Naz Reid": {"PTS": 14.4, "REB": 5.6, "AST": 1.8, "POS": "C", "TEAM": "Minnesota Timberwolves"},
+        "Jaden McDaniels": {"PTS": 13.8, "REB": 4.1, "AST": 1.6, "POS": "F", "TEAM": "Minnesota Timberwolves"},
+        "Donte DiVincenzo": {"PTS": 11.8, "REB": 3.8, "AST": 3.4, "POS": "G", "TEAM": "Minnesota Timberwolves"},
+        "Mike Conley": {"PTS": 9.2, "REB": 2.8, "AST": 5.4, "POS": "G", "TEAM": "Minnesota Timberwolves"},
+        "Terance Shannon Jr": {"PTS": 11.1, "REB": 3.5, "AST": 2.6, "POS": "G", "TEAM": "Minnesota Timberwolves"},
+        # Phoenix, San Antonio, Sacramento, Memphis
+        "Devin Booker": {"PTS": 27.8, "REB": 4.6, "AST": 6.9, "POS": "G", "TEAM": "Phoenix Suns"},
+        "Bradley Beal": {"PTS": 17.8, "REB": 4.1, "AST": 4.6, "POS": "G", "TEAM": "Phoenix Suns"},
+        "Jusuf Nurkic": {"PTS": 9.6, "REB": 9.8, "AST": 2.8, "POS": "C", "TEAM": "Phoenix Suns"},
+        "Tyus Jones": {"PTS": 10.4, "REB": 2.8, "AST": 6.4, "POS": "G", "TEAM": "Phoenix Suns"},
+        "Grayson Allen": {"PTS": 13.6, "REB": 3.2, "AST": 2.4, "POS": "G", "TEAM": "Phoenix Suns"},
+        "Royce O'Neale": {"PTS": 8.4, "REB": 4.8, "AST": 2.8, "POS": "F", "TEAM": "Phoenix Suns"},
+        "Victor Wembanyama": {"PTS": 26.8, "REB": 11.2, "AST": 4.1, "POS": "C", "TEAM": "San Antonio Spurs"},
+        "De'Aaron Fox": {"PTS": 24.6, "REB": 4.6, "AST": 6.1, "POS": "G", "TEAM": "San Antonio Spurs"},
+        "Devin Vassell": {"PTS": 17.6, "REB": 3.8, "AST": 3.6, "POS": "G", "TEAM": "San Antonio Spurs"},
+        "Jeremy Sochan": {"PTS": 13.8, "REB": 7.8, "AST": 3.2, "POS": "F", "TEAM": "San Antonio Spurs"},
+        "Chris Paul": {"PTS": 9.8, "REB": 3.8, "AST": 8.2, "POS": "G", "TEAM": "San Antonio Spurs"},
+        "Harrison Barnes": {"PTS": 11.4, "REB": 4.4, "AST": 1.8, "POS": "F", "TEAM": "San Antonio Spurs"},
+        "Stephon Castle": {"PTS": 11.2, "REB": 3.2, "AST": 3.8, "POS": "G", "TEAM": "San Antonio Spurs"},
+        "Domantas Sabonis": {"PTS": 19.8, "REB": 14.1, "AST": 7.8, "POS": "C", "TEAM": "Sacramento Kings"},
+        "DeMar DeRozan": {"PTS": 22.8, "REB": 4.2, "AST": 4.4, "POS": "F", "TEAM": "Sacramento Kings"},
+        "Keegan Murray": {"PTS": 13.8, "REB": 7.2, "AST": 1.8, "POS": "F", "TEAM": "Sacramento Kings"},
+        "Malik Monk": {"PTS": 15.2, "REB": 3.2, "AST": 4.8, "POS": "G", "TEAM": "Sacramento Kings"},
+        "Ja Morant": {"PTS": 25.4, "REB": 5.1, "AST": 8.4, "POS": "G", "TEAM": "Memphis Grizzlies"},
+        "Jaren Jackson Jr": {"PTS": 22.4, "REB": 6.1, "AST": 1.8, "POS": "F", "TEAM": "Memphis Grizzlies"},
+        "Desmond Bane": {"PTS": 19.8, "REB": 4.6, "AST": 4.8, "POS": "G", "TEAM": "Memphis Grizzlies"},
+        "Santi Aldama": {"PTS": 12.6, "REB": 6.8, "AST": 2.4, "POS": "F", "TEAM": "Memphis Grizzlies"},
+        "Scotty Pippen Jr": {"PTS": 11.4, "REB": 3.8, "AST": 5.6, "POS": "G", "TEAM": "Memphis Grizzlies"},
+        "Zach Edey": {"PTS": 10.8, "REB": 7.6, "AST": 1.0, "POS": "C", "TEAM": "Memphis Grizzlies"},
+        # East Rest of League
+        "Giannis Antetokounmpo": {"PTS": 30.8, "REB": 11.6, "AST": 6.1, "POS": "F", "TEAM": "Milwaukee Bucks"},
+        "Bobby Portis": {"PTS": 13.4, "REB": 7.8, "AST": 1.4, "POS": "F", "TEAM": "Milwaukee Bucks"},
+        "Brook Lopez": {"PTS": 11.8, "REB": 5.2, "AST": 1.6, "POS": "C", "TEAM": "Milwaukee Bucks"},
+        "Gary Trent Jr": {"PTS": 11.2, "REB": 2.6, "AST": 1.6, "POS": "G", "TEAM": "Milwaukee Bucks"},
+        "Donovan Mitchell": {"PTS": 27.2, "REB": 4.4, "AST": 5.2, "POS": "G", "TEAM": "Cleveland Cavaliers"},
+        "Darius Garland": {"PTS": 20.4, "REB": 2.8, "AST": 6.6, "POS": "G", "TEAM": "Cleveland Cavaliers"},
+        "Evan Mobley": {"PTS": 18.2, "REB": 9.2, "AST": 2.8, "POS": "C", "TEAM": "Cleveland Cavaliers"},
+        "Jarrett Allen": {"PTS": 14.6, "REB": 10.8, "AST": 2.1, "POS": "C", "TEAM": "Cleveland Cavaliers"},
+        "Caris LeVert": {"PTS": 11.8, "REB": 3.4, "AST": 4.2, "POS": "G", "TEAM": "Cleveland Cavaliers"},
+        "Dean Wade": {"PTS": 6.2, "REB": 4.2, "AST": 1.6, "POS": "F", "TEAM": "Cleveland Cavaliers"},
+        "Tyrese Maxey": {"PTS": 27.6, "REB": 3.8, "AST": 6.4, "POS": "G", "TEAM": "Philadelphia 76ers"},
+        "Joel Embiid": {"PTS": 26.8, "REB": 10.4, "AST": 4.8, "POS": "C", "TEAM": "Philadelphia 76ers"},
+        "Paul George": {"PTS": 18.6, "REB": 5.6, "AST": 4.4, "POS": "F", "TEAM": "Philadelphia 76ers"},
+        "Kelly Oubre Jr": {"PTS": 13.8, "REB": 4.8, "AST": 1.6, "POS": "F", "TEAM": "Philadelphia 76ers"},
+        "Jared McCain": {"PTS": 15.2, "REB": 2.6, "AST": 2.8, "POS": "G", "TEAM": "Philadelphia 76ers"},
+        "Bam Adebayo": {"PTS": 20.2, "REB": 10.4, "AST": 4.1, "POS": "C", "TEAM": "Miami Heat"},
+        "Tyler Herro": {"PTS": 23.4, "REB": 5.2, "AST": 4.8, "POS": "G", "TEAM": "Miami Heat"},
+        "Jimmy Butler": {"PTS": 18.8, "REB": 5.4, "AST": 4.8, "POS": "F", "TEAM": "Miami Heat"},
+        "Terry Rozier": {"PTS": 13.4, "REB": 3.8, "AST": 4.2, "POS": "G", "TEAM": "Miami Heat"},
+        "Jaime Jaquez Jr": {"PTS": 10.8, "REB": 4.8, "AST": 2.4, "POS": "F", "TEAM": "Miami Heat"},
+        "Duncan Robinson": {"PTS": 11.8, "REB": 2.4, "AST": 2.2, "POS": "G", "TEAM": "Detroit Pistons"},
+        "Tyrese Haliburton": {"PTS": 21.4, "REB": 3.9, "AST": 10.4, "POS": "G", "TEAM": "Indiana Pacers"},
+        "Pascal Siakam": {"PTS": 20.6, "REB": 7.2, "AST": 3.8, "POS": "F", "TEAM": "Indiana Pacers"},
+        "Myles Turner": {"PTS": 15.8, "REB": 7.1, "AST": 1.6, "POS": "C", "TEAM": "Indiana Pacers"},
+        "Bennedict Mathurin": {"PTS": 16.8, "REB": 5.8, "AST": 2.0, "POS": "G", "TEAM": "Indiana Pacers"},
+        "Andrew Nembhard": {"PTS": 10.8, "REB": 3.1, "AST": 4.8, "POS": "G", "TEAM": "Indiana Pacers"},
+        "TJ McConnell": {"PTS": 10.2, "REB": 2.6, "AST": 5.2, "POS": "G", "TEAM": "Indiana Pacers"},
+        "Trae Young": {"PTS": 24.2, "REB": 3.1, "AST": 10.8, "POS": "G", "TEAM": "Washington Wizards"},
+        "Jalen Johnson": {"PTS": 19.6, "REB": 10.1, "AST": 5.2, "POS": "F", "TEAM": "Atlanta Hawks"},
+        "Dyson Daniels": {"PTS": 13.8, "REB": 5.1, "AST": 3.6, "POS": "G", "TEAM": "Atlanta Hawks"},
+        "Clint Capela": {"PTS": 10.4, "REB": 9.2, "AST": 1.2, "POS": "C", "TEAM": "Atlanta Hawks"},
+        "Onyeka Okongwu": {"PTS": 11.2, "REB": 6.8, "AST": 1.6, "POS": "C", "TEAM": "Atlanta Hawks"},
+        "Zaccharie Risacher": {"PTS": 11.6, "REB": 3.8, "AST": 1.4, "POS": "F", "TEAM": "Atlanta Hawks"},
+        "Cade Cunningham": {"PTS": 24.6, "REB": 6.4, "AST": 9.1, "POS": "G", "TEAM": "Detroit Pistons"},
+        "Jaden Ivey": {"PTS": 17.8, "REB": 4.2, "AST": 4.2, "POS": "G", "TEAM": "Detroit Pistons"},
+        "Tobias Harris": {"PTS": 13.8, "REB": 6.8, "AST": 2.4, "POS": "F", "TEAM": "Detroit Pistons"},
+        "Jalen Duren": {"PTS": 10.6, "REB": 10.2, "AST": 2.4, "POS": "C", "TEAM": "Detroit Pistons"},
+        "Malik Beasley": {"PTS": 15.4, "REB": 3.1, "AST": 1.8, "POS": "G", "TEAM": "Detroit Pistons"},
+        "Paul Reed Jr": {"PTS": 7.4, "REB": 5.2, "AST": 1.4, "POS": "C", "TEAM": "Detroit Pistons"},
+        "Kevin Huerter": {"PTS": 11.8, "REB": 3.4, "AST": 2.6, "POS": "G", "TEAM": "Detroit Pistons"},
+        "LaMelo Ball": {"PTS": 26.9, "REB": 5.4, "AST": 8.2, "POS": "G", "TEAM": "Charlotte Hornets"},
+        "Brandon Miller": {"PTS": 21.2, "REB": 5.2, "AST": 3.6, "POS": "F", "TEAM": "Charlotte Hornets"},
+        "Miles Bridges": {"PTS": 17.4, "REB": 6.8, "AST": 3.1, "POS": "F", "TEAM": "Charlotte Hornets"},
+        "Tidjane Salaun": {"PTS": 7.6, "REB": 4.4, "AST": 1.4, "POS": "F", "TEAM": "Charlotte Hornets"},
+        "Moussa Diabate": {"PTS": 6.4, "REB": 7.8, "AST": 1.0, "POS": "C", "TEAM": "Charlotte Hornets"},
+        "Zach LaVine": {"PTS": 23.4, "REB": 4.8, "AST": 4.1, "POS": "G", "TEAM": "Chicago Bulls"},
+        "Nikola Vucevic": {"PTS": 18.2, "REB": 10.8, "AST": 3.4, "POS": "C", "TEAM": "Chicago Bulls"},
+        "Coby White": {"PTS": 19.4, "REB": 4.2, "AST": 4.8, "POS": "G", "TEAM": "Chicago Bulls"},
+        "Josh Giddey": {"PTS": 13.2, "REB": 6.8, "AST": 6.9, "POS": "G", "TEAM": "Chicago Bulls"},
+        "Ayo Dosunmu": {"PTS": 12.4, "REB": 3.6, "AST": 3.8, "POS": "G", "TEAM": "Chicago Bulls"},
+        "Scottie Barnes": {"PTS": 20.8, "REB": 8.2, "AST": 6.4, "POS": "F", "TEAM": "Toronto Raptors"},
+        "RJ Barrett": {"PTS": 22.6, "REB": 6.2, "AST": 5.8, "POS": "F", "TEAM": "Toronto Raptors"},
+        "Immanuel Quickley": {"PTS": 17.4, "REB": 3.8, "AST": 6.4, "POS": "G", "TEAM": "Toronto Raptors"},
+        "Jakob Poeltl": {"PTS": 14.4, "REB": 11.4, "AST": 2.6, "POS": "C", "TEAM": "Toronto Raptors"},
+        "Gradey Dick": {"PTS": 16.8, "REB": 3.4, "AST": 2.1, "POS": "G", "TEAM": "Toronto Raptors"},
+        "Cam Thomas": {"PTS": 24.2, "REB": 3.4, "AST": 3.4, "POS": "G", "TEAM": "Brooklyn Nets"},
+        "Dennis Schroder": {"PTS": 17.8, "REB": 3.1, "AST": 6.4, "POS": "G", "TEAM": "Brooklyn Nets"},
+        "Cameron Johnson": {"PTS": 18.2, "REB": 4.4, "AST": 2.9, "POS": "F", "TEAM": "Brooklyn Nets"},
+        "Nic Claxton": {"PTS": 10.4, "REB": 8.4, "AST": 2.2, "POS": "C", "TEAM": "Brooklyn Nets"},
+        "Jordan Poole": {"PTS": 20.2, "REB": 2.6, "AST": 4.8, "POS": "G", "TEAM": "Washington Wizards"},
+        "Kyle Kuzma": {"PTS": 17.8, "REB": 6.2, "AST": 3.2, "POS": "F", "TEAM": "Washington Wizards"},
+        "Alex Sarr": {"PTS": 10.8, "REB": 7.6, "AST": 2.1, "POS": "C", "TEAM": "Washington Wizards"},
+        "Bilal Coulibaly": {"PTS": 12.4, "REB": 5.4, "AST": 2.8, "POS": "F", "TEAM": "Washington Wizards"},
+        "Kyshawn George": {"PTS": 15.4, "REB": 4.6, "AST": 4.2, "POS": "G", "TEAM": "Washington Wizards"},
+        "Jonas Valanciunas": {"PTS": 12.2, "REB": 8.1, "AST": 2.2, "POS": "C", "TEAM": "Washington Wizards"},
+        "Brandon Ingram": {"PTS": 22.8, "REB": 5.6, "AST": 5.2, "POS": "F", "TEAM": "New Orleans Pelicans"},
+        "Trey Murphy III": {"PTS": 18.4, "REB": 4.8, "AST": 2.6, "POS": "F", "TEAM": "New Orleans Pelicans"},
+        "Yves Missi": {"PTS": 9.2, "REB": 8.4, "AST": 1.4, "POS": "C", "TEAM": "New Orleans Pelicans"}
     }
     return {normalize_name(k): v for k, v in raw_baselines.items()}
 
@@ -308,12 +334,15 @@ def sync_live_nba_data():
     team_db = get_team_efficiency_baselines()
     player_db = get_fallback_player_baselines()
 
-    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    cached = load_json(LIVE_STATS_CACHE_FILE, {})
-    if cached.get("date") == today_str and cached.get("player_db") and cached.get("team_db"):
-        return cached["team_db"], cached["player_db"], cached["opp_ranks"]
+    central_tz = pytz.timezone("America/Chicago")
+    now_ct = datetime.now(timezone.utc).astimezone(central_tz)
+    today_str = now_ct.strftime("%Y-%m-%d")
 
-    print("🔄 Syncing live NBA player stats, period scoring, and defensive rankings from ESPN...")
+    cached = load_json(LIVE_STATS_CACHE_FILE, {})
+    if cached.get("date") == today_str and cached.get("player_db") and cached.get("team_db") and "b2b_teams" in cached:
+        return cached["team_db"], cached["player_db"], cached["opp_ranks"], set(cached["b2b_teams"])
+
+    print("🔄 Syncing live NBA stats, team rosters, B2B rest, and period splits from ESPN...")
 
     try:
         st_url = "https://site.api.espn.com/apis/v2/sports/basketball/nba/standings"
@@ -333,10 +362,11 @@ def sync_live_nba_data():
     player_logs = {}
     opp_allowed_logs = {t: {"PTS": [], "REB": [], "AST": []} for t in team_db}
     period_logs = {t: {"q1_off": [], "q1_def": [], "h1_off": [], "h1_def": []} for t in team_db}
+    b2b_teams = set()
 
-    now_utc = datetime.now(timezone.utc)
-    for days_ago in range(1, LOOKBACK_DAYS_FOR_STATS + 1):
-        d_str = (now_utc - timedelta(days=days_ago)).strftime("%Y%m%d")
+    # Loop from oldest to most recent so latest team assignment always wins
+    for days_ago in range(LOOKBACK_DAYS_FOR_STATS, 0, -1):
+        d_str = (now_ct - timedelta(days=days_ago)).strftime("%Y%m%d")
         sb_url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={d_str}"
         try:
             sb_data = requests.get(sb_url, timeout=8).json()
@@ -351,6 +381,11 @@ def sync_live_nba_data():
                 if len(comps) == 2:
                     t1_name = normalize_team_name(comps[0].get("team", {}).get("displayName", ""))
                     t2_name = normalize_team_name(comps[1].get("team", {}).get("displayName", ""))
+
+                    if days_ago == 1:
+                        b2b_teams.add(t1_name)
+                        b2b_teams.add(t2_name)
+
                     t1_lines = [float(x.get("value", 0)) for x in comps[0].get("linescores", [])]
                     t2_lines = [float(x.get("value", 0)) for x in comps[1].get("linescores", [])]
 
@@ -382,7 +417,10 @@ def sync_live_nba_data():
 
                         t_pts, t_reb, t_ast = 0.0, 0.0, 0.0
                         for ath in stat_blk.get("athletes", []):
-                            p_disp = ath.get("athlete", {}).get("displayName", "")
+                            ath_obj = ath.get("athlete", {})
+                            p_disp = ath_obj.get("displayName", "")
+                            pos_abbr = ath_obj.get("position", {}).get("abbreviation", "G")
+                            p_pos_clean = "C" if "C" in pos_abbr else ("F" if "F" in pos_abbr else "G")
                             s_vals = ath.get("stats", [])
                             if not p_disp or not s_vals or pts_idx == -1:
                                 continue
@@ -399,10 +437,11 @@ def sync_live_nba_data():
                                 if mins >= 12.0:
                                     norm_p = normalize_name(p_disp)
                                     if norm_p not in player_logs:
-                                        player_logs[norm_p] = {"PTS": [], "REB": [], "AST": []}
+                                        player_logs[norm_p] = {"PTS": [], "REB": [], "AST": [], "TEAM": t_name, "POS": p_pos_clean}
                                     player_logs[norm_p]["PTS"].append(pts)
                                     player_logs[norm_p]["REB"].append(reb)
                                     player_logs[norm_p]["AST"].append(ast)
+                                    player_logs[norm_p]["TEAM"] = t_name
                             except:
                                 continue
                         team_totals[t_name] = {"PTS": t_pts, "REB": t_reb, "AST": t_ast}
@@ -427,19 +466,21 @@ def sync_live_nba_data():
             live_reb = float(np.mean(logs["REB"]))
             live_ast = float(np.mean(logs["AST"]))
             if norm_p in player_db:
-                pos_val = player_db[norm_p].get("POS", "G")
+                pos_val = player_db[norm_p].get("POS", logs.get("POS", "G"))
                 player_db[norm_p] = {
                     "PTS": round(0.50 * live_pts + 0.50 * player_db[norm_p]["PTS"], 2),
                     "REB": round(0.50 * live_reb + 0.50 * player_db[norm_p]["REB"], 2),
                     "AST": round(0.50 * live_ast + 0.50 * player_db[norm_p]["AST"], 2),
-                    "POS": pos_val
+                    "POS": pos_val,
+                    "TEAM": logs["TEAM"]
                 }
             else:
                 player_db[norm_p] = {
                     "PTS": round(live_pts, 2),
                     "REB": round(live_reb, 2),
                     "AST": round(live_ast, 2),
-                    "POS": "G"
+                    "POS": logs.get("POS", "G"),
+                    "TEAM": logs["TEAM"]
                 }
 
     for t_name, logs in opp_allowed_logs.items():
@@ -474,13 +515,16 @@ def sync_live_nba_data():
         "date": today_str,
         "team_db": team_db,
         "player_db": player_db,
-        "opp_ranks": opp_ranks
+        "opp_ranks": opp_ranks,
+        "b2b_teams": list(b2b_teams)
     })
-    print(f"✅ Synced {len(player_db)} active NBA players, period scoring, & team defensive rankings!")
-    return team_db, player_db, opp_ranks
+    print(f"✅ Synced {len(player_db)} players, {len(b2b_teams)} B2B teams, & 30 defensive rankings!")
+    return team_db, player_db, opp_ranks, b2b_teams
 
 def fetch_injured_players():
-    injured_set = set()
+    """Returns (prop_excluded_players, confirmed_out_or_doubtful_players)."""
+    prop_excluded = set()
+    confirmed_out = set()
     try:
         inj_url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/injuries"
         res = requests.get(inj_url, timeout=10).json()
@@ -488,8 +532,12 @@ def fetch_injured_players():
             for inj in team_entry.get("injuries", []):
                 p_name = inj.get("athlete", {}).get("displayName")
                 status = inj.get("status", "").lower()
-                if p_name and any(term in status for term in ["out", "doubtful", "questionable", "injured", "day-to-day"]):
-                    injured_set.add(normalize_name(p_name))
+                if p_name:
+                    norm_p = normalize_name(p_name)
+                    if any(term in status for term in ["out", "doubtful", "questionable", "injured", "day-to-day"]):
+                        prop_excluded.add(norm_p)
+                    if any(term in status for term in ["out", "doubtful", "injured"]):
+                        confirmed_out.add(norm_p)
     except:
         pass
 
@@ -501,11 +549,25 @@ def fetch_injured_players():
                 for inj in team.get("injuries", []):
                     p_name = inj.get("athlete", {}).get("displayName")
                     status = inj.get("status", "").lower()
-                    if p_name and any(term in status for term in ["out", "doubtful", "questionable", "injured"]):
-                        injured_set.add(normalize_name(p_name))
+                    if p_name:
+                        norm_p = normalize_name(p_name)
+                        if any(term in status for term in ["out", "doubtful", "questionable", "injured"]):
+                            prop_excluded.add(norm_p)
+                        if any(term in status for term in ["out", "doubtful", "injured"]):
+                            confirmed_out.add(norm_p)
     except:
         pass
-    return injured_set
+    return prop_excluded, confirmed_out
+
+def calc_team_injury_deduction(team_name, player_db, confirmed_out):
+    """Deducts projected team points when key scorers (12+ PPG) are Out/Doubtful."""
+    penalty = 0.0
+    for norm_p, p_data in player_db.items():
+        if p_data.get("TEAM") == team_name and norm_p in confirmed_out:
+            pts = p_data.get("PTS", 0.0)
+            if pts >= 12.0:
+                penalty += (pts - 8.5) * 0.18
+    return min(penalty, 7.5)
 
 def get_matchup_dot(opp_rank, pick_dir):
     if pick_dir == "Over":
@@ -526,9 +588,9 @@ def scan_all_fanduel_markets():
     tracked_bets = load_json(TRACKER_FILE, [])
     already_posted = {b["bet_key"] for b in tracked_bets}
     scanned_events = set(load_json(SCANNED_EVENTS_FILE, []))
-    injured_players = fetch_injured_players()
+    prop_excluded, confirmed_out = fetch_injured_players()
 
-    stats_db, player_db, opp_ranks = sync_live_nba_data()
+    stats_db, player_db, opp_ranks, b2b_teams = sync_live_nba_data()
     avg_off = float(np.mean([v["off"] for v in stats_db.values()]))
     avg_pace = float(np.mean([v["pace"] for v in stats_db.values()]))
     avg_q1_off = float(np.mean([v["q1_off"] for v in stats_db.values()]))
@@ -581,16 +643,30 @@ def scan_all_fanduel_markets():
         h_ranks = opp_ranks.get(home, {"PTS": 15, "REB": 15, "AST": 15})
         a_ranks = opp_ranks.get(away, {"PTS": 15, "REB": 15, "AST": 15})
 
+        # 1. Pace Normalization (No Double-Counting)
         exp_pace = (h_stats["pace"] * a_stats["pace"]) / avg_pace
-        proj_h_ortg = (h_stats["off"] * a_stats["def"]) / avg_off
-        proj_a_ortg = (a_stats["off"] * h_stats["def"]) / avg_off
+        team_avg_pace = (h_stats["pace"] + a_stats["pace"]) / 2.0
+        pace_scaler = exp_pace / team_avg_pace
 
-        home_pts = (proj_h_ortg * (exp_pace / 100.0)) + (HOME_COURT_ADVANTAGE / 2.0)
-        away_pts = (proj_a_ortg * (exp_pace / 100.0)) - (HOME_COURT_ADVANTAGE / 2.0)
+        raw_h_pts = ((h_stats["off"] + a_stats["def"]) / 2.0) * pace_scaler
+        raw_a_pts = ((a_stats["off"] + h_stats["def"]) / 2.0) * pace_scaler
 
-        model_total = home_pts + away_pts
-        model_margin = home_pts - away_pts
+        # 2. Star Injury & Back-to-Back (B2B) Adjustments
+        h_inj_pen = calc_team_injury_deduction(home, player_db, confirmed_out)
+        a_inj_pen = calc_team_injury_deduction(away, player_db, confirmed_out)
 
+        h_b2b_pen = 2.0 if home in b2b_teams else 0.0
+        a_b2b_pen = 2.6 if away in b2b_teams else 0.0
+
+        # 3. 0.65 Bayesian Shrinkage for Sharp Margin & Total
+        shrunk_eff_diff = (raw_h_pts - raw_a_pts) * SPREAD_SHRINKAGE
+        model_margin = shrunk_eff_diff + HOME_COURT_ADVANTAGE - (h_inj_pen - a_inj_pen) - (h_b2b_pen - a_b2b_pen)
+
+        raw_total = raw_h_pts + raw_a_pts
+        league_avg_total = avg_off * 2.0
+        model_total = (0.75 * raw_total + 0.25 * league_avg_total) - (h_inj_pen + a_inj_pen) * 0.65 - (h_b2b_pen + a_b2b_pen) * 0.50
+
+        # --- A. FULL-GAME TOTALS & SPREADS ---
         if SCAN_FULL_GAME:
             for m in g["bookmakers"][0].get("markets", []):
                 if m["key"] == "totals":
@@ -638,10 +714,11 @@ def scan_all_fanduel_markets():
                                 ev_pct = edge * 100.0
                                 opp_def_rk = opp_ranks.get(opp_team, {}).get("PTS", 15)
                                 fair_line = -model_margin if pick_team == home else model_margin
+                                b2b_note = " ⚠️B2B" if opp_team in b2b_teams else ""
                                 base_text = (
                                     f"**{pick_ab} {pick_line:+.1f}** `({juice:+d})`  •  *{a_ab} @ {h_ab}*\n"
                                     f"🔥 **+{ev_pct:.1f}% EV**  •  📊 Fair: **{pick_ab} {fair_line:+.1f}**\n"
-                                    f"🛡️ Opp Def: {opp_ab} **#{opp_def_rk}**  •  🕒 {time_short}\n"
+                                    f"🛡️ Opp Def: {opp_ab} **#{opp_def_rk}**{b2b_note}  •  🕒 {time_short}\n"
                                     f"{DIVIDER}"
                                 )
                                 msg_id = post_alert_to_discord(base_text)
@@ -649,6 +726,7 @@ def scan_all_fanduel_markets():
                                     tracked_bets.append({"bet_key": bet_key, "message_id": msg_id, "away": away, "home": home, "market": "FG_SPREAD", "pick_team": pick_team, "line": pick_line, "base_text": base_text, "status": "PENDING"})
                                     already_posted.add(bet_key)
 
+        # --- B. DEEP SCAN: 1H / 1Q & ALL STARTERS / ROLE PLAYER PROPS ---
         if (SCAN_HALVES_QUARTERS or SCAN_PLAYER_PROPS) and (event_id not in scanned_events) and (deep_scans_done < MAX_DEEP_SCAN_GAMES_PER_RUN):
             extra_markets = []
             if SCAN_HALVES_QUARTERS:
@@ -656,7 +734,6 @@ def scan_all_fanduel_markets():
             if SCAN_PLAYER_PROPS:
                 extra_markets.extend(["player_points", "player_rebounds", "player_assists"])
 
-HashKey = "player_points"
             ev_url = f"https://api.the-odds-api.com/v4/sports/basketball_nba/events/{event_id}/odds"
             ev_params = {
                 "apiKey": THE_ODDS_API_KEY,
@@ -670,6 +747,12 @@ HashKey = "player_points"
                 deep_scans_done += 1
                 scanned_events.add(event_id)
                 ev_data = ev_res.json()
+
+                # Pre-calculate period team projections with injury/B2B scaling
+                q1_h_pts = ((h_stats["q1_off"] + a_stats["q1_def"]) / 2.0) - (h_inj_pen * 0.22)
+                q1_a_pts = ((a_stats["q1_off"] + h_stats["q1_def"]) / 2.0) - (a_inj_pen * 0.22)
+                h1_h_pts = ((h_stats["h1_off"] + a_stats["h1_def"]) / 2.0) - (h_inj_pen * 0.46) - (h_b2b_pen * 0.35)
+                h1_a_pts = ((a_stats["h1_off"] + h_stats["h1_def"]) / 2.0) - (a_inj_pen * 0.46) - (a_b2b_pen * 0.35)
 
                 if ev_data.get("bookmakers"):
                     for m in ev_data["bookmakers"][0].get("markets", []):
@@ -685,15 +768,7 @@ HashKey = "player_points"
                             under_o = next((o for o in m["outcomes"] if o["name"] == "Under"), None)
                             if over_o and under_o and bet_key not in already_posted:
                                 line = float(over_o["point"])
-
-                                if is_q1:
-                                    home_period_pts = h_stats["q1_off"] * (a_stats["q1_def"] / avg_q1_off)
-                                    away_period_pts = a_stats["q1_off"] * (h_stats["q1_def"] / avg_q1_off)
-                                else:
-                                    home_period_pts = h_stats["h1_off"] * (a_stats["h1_def"] / avg_h1_off)
-                                    away_period_pts = a_stats["h1_off"] * (h_stats["h1_def"] / avg_h1_off)
-
-                                proj_period_tot = home_period_pts + away_period_pts
+                                proj_period_tot = (q1_h_pts + q1_a_pts) if is_q1 else (h1_h_pts + h1_a_pts)
                                 diff = proj_period_tot - line
                                 pick_dir = "Over" if diff >= 0 else "Under"
                                 juice = int(over_o["price"]) if diff >= 0 else int(under_o["price"])
@@ -713,6 +788,42 @@ HashKey = "player_points"
                                         tracked_bets.append({"bet_key": bet_key, "message_id": msg_id, "away": away, "home": home, "market": m_key.upper(), "line": line, "pick_dir": pick_dir, "base_text": base_text, "status": "PENDING"})
                                         already_posted.add(bet_key)
 
+                        elif m_key in ["spreads_h1", "spreads_q1"]:
+                            is_q1 = (m_key == "spreads_q1")
+                            period_label = "1Q" if is_q1 else "1H"
+                            std_dev = NBA_STD_DEV_Q1_SPREAD if is_q1 else NBA_STD_DEV_H1_SPREAD
+                            bet_key = f"{match_key}_{m_key}"
+
+                            home_o = next((o for o in m["outcomes"] if normalize_team_name(o["name"]) == home), None)
+                            away_o = next((o for o in m["outcomes"] if normalize_team_name(o["name"]) == away), None)
+                            if home_o and away_o and bet_key not in already_posted:
+                                h_line = float(home_o["point"])
+                                raw_p_diff = (q1_h_pts - q1_a_pts) if is_q1 else (h1_h_pts - h1_a_pts)
+                                hca_p = 0.55 if is_q1 else 1.10
+                                p_margin = (raw_p_diff * SPREAD_SHRINKAGE) + hca_p
+                                sp_diff = p_margin - (-h_line)
+
+                                pick_team = home if sp_diff >= 0 else away
+                                pick_ab = get_abbr(pick_team)
+                                pick_line = h_line if sp_diff >= 0 else float(away_o["point"])
+                                juice = int(home_o["price"]) if sp_diff >= 0 else int(away_o["price"])
+                                win_prob = norm.cdf(abs(sp_diff) / std_dev)
+                                edge = win_prob - american_to_implied_prob(juice)
+
+                                if edge >= MIN_EDGE_TO_POST:
+                                    ev_pct = edge * 100.0
+                                    fair_p = -p_margin if pick_team == home else p_margin
+                                    base_text = (
+                                        f"**{pick_ab} {period_label} {pick_line:+.1f}** `({juice:+d})`  •  *{a_ab} @ {h_ab}*\n"
+                                        f"🔥 **+{ev_pct:.1f}% EV**  •  📊 Fair: **{pick_ab} {fair_p:+.1f}**\n"
+                                        f"⚡ {period_label} Matchup Sync  •  🕒 {time_short}\n"
+                                        f"{DIVIDER}"
+                                    )
+                                    msg_id = post_alert_to_discord(base_text)
+                                    if msg_id:
+                                        tracked_bets.append({"bet_key": bet_key, "message_id": msg_id, "away": away, "home": home, "market": m_key.upper(), "pick_team": pick_team, "line": pick_line, "base_text": base_text, "status": "PENDING"})
+                                        already_posted.add(bet_key)
+
                         elif m_key in ["player_points", "player_rebounds", "player_assists"]:
                             stat_code = {"player_points": "PTS", "player_rebounds": "REB", "player_assists": "AST"}[m_key]
                             players_in_market = {}
@@ -724,34 +835,56 @@ HashKey = "player_points"
 
                             for p_name, sides in players_in_market.items():
                                 norm_p = normalize_name(p_name)
-                                if norm_p in injured_players or norm_p not in player_db or "Over" not in sides or "Under" not in sides:
+                                if norm_p in prop_excluded or norm_p not in player_db or "Over" not in sides or "Under" not in sides:
                                     continue
                                 bet_key = f"{match_key}_{norm_p}_{stat_code}"
                                 if bet_key in already_posted:
                                     continue
 
                                 line = float(sides["Over"]["point"])
+                                # Skip micro-lines that distort Poisson probabilities
+                                if (stat_code == "PTS" and line < MIN_PROP_LINE_PTS) or (stat_code != "PTS" and line < MIN_PROP_LINE_OTHER):
+                                    continue
+
                                 p_info = player_db[norm_p]
                                 base_avg = p_info[stat_code]
                                 p_pos = p_info.get("POS", "G")
+                                p_team = p_info.get("TEAM", "")
 
-                                # --- DUAL-LAYER DEFENSE (TEAM + POSITION MODIFIER) ---
-                                if stat_code == "PTS":
-                                    team_def_mult = ((h_stats["def"] + a_stats["def"]) / 2.0) / avg_off
-                                    combined_def_rk = int(round((h_ranks["PTS"] + a_ranks["PTS"]) / 2.0))
-                                    opp_stat_val = (h_stats["def"] + a_stats["def"]) / 2.0
-                                elif stat_code == "REB":
-                                    team_def_mult = ((h_stats["opp_reb"] + a_stats["opp_reb"]) / 2.0) / avg_opp_reb
-                                    combined_def_rk = int(round((h_ranks["REB"] + a_ranks["REB"]) / 2.0))
-                                    opp_stat_val = (h_stats["opp_reb"] + a_stats["opp_reb"]) / 2.0
+                                # --- TRUE SINGLE-OPPONENT DEFENSE MAPPING ---
+                                if p_team == home:
+                                    opp_s, opp_r, opp_ab_str = a_stats, a_ranks, a_ab
+                                elif p_team == away:
+                                    opp_s, opp_r, opp_ab_str = h_stats, h_ranks, h_ab
                                 else:
-                                    team_def_mult = ((h_stats["opp_ast"] + a_stats["opp_ast"]) / 2.0) / avg_opp_ast
-                                    combined_def_rk = int(round((h_ranks["AST"] + a_ranks["AST"]) / 2.0))
-                                    opp_stat_val = (h_stats["opp_ast"] + a_stats["opp_ast"]) / 2.0
+                                    # Fallback if player team wasn't matched
+                                    opp_s = {
+                                        "def": (h_stats["def"] + a_stats["def"]) / 2.0,
+                                        "opp_reb": (h_stats["opp_reb"] + a_stats["opp_reb"]) / 2.0,
+                                        "opp_ast": (h_stats["opp_ast"] + a_stats["opp_ast"]) / 2.0
+                                    }
+                                    opp_r = {
+                                        "PTS": int(round((h_ranks["PTS"] + a_ranks["PTS"]) / 2.0)),
+                                        "REB": int(round((h_ranks["REB"] + a_ranks["REB"]) / 2.0)),
+                                        "AST": int(round((h_ranks["AST"] + a_ranks["AST"]) / 2.0))
+                                    }
+                                    opp_ab_str = f"{a_ab}/{h_ab}"
 
-                                # Position multiplier adjustment based on player position type
-                                pos_modifier = 1.05 if p_pos == "G" and stat_code in ["PTS", "AST"] else (1.05 if p_pos == "C" and stat_code == "REB" else 1.0)
-                                matchup_mult = (0.50 * team_def_mult) + (0.50 * (team_def_mult * pos_modifier))
+                                if stat_code == "PTS":
+                                    team_def_mult = opp_s["def"] / avg_off
+                                    opp_def_rk = opp_r["PTS"]
+                                    opp_stat_val = opp_s["def"]
+                                elif stat_code == "REB":
+                                    team_def_mult = opp_s["opp_reb"] / avg_opp_reb
+                                    opp_def_rk = opp_r["REB"]
+                                    opp_stat_val = opp_s["opp_reb"]
+                                else:
+                                    team_def_mult = opp_s["opp_ast"] / avg_opp_ast
+                                    opp_def_rk = opp_r["AST"]
+                                    opp_stat_val = opp_s["opp_ast"]
+
+                                pos_modifier = 1.03 if p_pos == "G" and stat_code in ["PTS", "AST"] else (1.03 if p_pos == "C" and stat_code == "REB" else 1.0)
+                                matchup_mult = (0.60 * team_def_mult) + (0.40 * (team_def_mult * pos_modifier))
 
                                 pace_mult = exp_pace / avg_pace
                                 lambda_proj = base_avg * (0.75 * matchup_mult + 0.25 * pace_mult)
@@ -767,11 +900,11 @@ HashKey = "player_points"
                                 edge = win_prob - american_to_implied_prob(juice)
                                 if edge >= MIN_EDGE_TO_POST:
                                     ev_pct = edge * 100.0
-                                    dot = get_matchup_dot(combined_def_rk, pick_dir)
+                                    dot = get_matchup_dot(opp_def_rk, pick_dir)
                                     base_text = (
                                         f"**{p_name} — {pick_dir} {line} {stat_code}** `({juice:+d})`\n"
                                         f"🔥 **+{ev_pct:.1f}% EV**  •  📊 Avg: **{base_avg:.1f}** *(Proj: {lambda_proj:.1f})*\n"
-                                        f"{dot} Def: **#{combined_def_rk}** *({opp_stat_val:.1f}/g)*  •  🏀 {a_ab}@{h_ab} *({time_short})*\n"
+                                        f"{dot} vs {opp_ab_str} Def: **#{opp_def_rk}** *({opp_stat_val:.1f}/g)*  •  🏀 {a_ab}@{h_ab} *({time_short})*\n"
                                         f"{DIVIDER}"
                                     )
                                     msg_id = post_alert_to_discord(base_text)
@@ -847,9 +980,21 @@ def check_scores_and_grade_all_markets():
             if mkt == "TOTALS_Q1" and (period > 1 or is_final) and len(h_lines) >= 1 and len(a_lines) >= 1:
                 q1_tot = h_lines[0] + a_lines[0]
                 did_win = (q1_tot > bet["line"]) if bet["pick_dir"] == "Over" else (q1_tot < bet["line"])
+            elif mkt == "SPREADS_Q1" and (period > 1 or is_final) and len(h_lines) >= 1 and len(a_lines) >= 1:
+                if bet["pick_team"] == h_name:
+                    did_win = (h_lines[0] + bet["line"]) > a_lines[0]
+                else:
+                    did_win = (a_lines[0] + bet["line"]) > h_lines[0]
             elif mkt == "TOTALS_H1" and (period > 2 or is_final) and len(h_lines) >= 2 and len(a_lines) >= 2:
                 h1_tot = sum(h_lines[:2]) + sum(a_lines[:2])
                 did_win = (h1_tot > bet["line"]) if bet["pick_dir"] == "Over" else (h1_tot < bet["line"])
+            elif mkt == "SPREADS_H1" and (period > 2 or is_final) and len(h_lines) >= 2 and len(a_lines) >= 2:
+                h1_h = sum(h_lines[:2])
+                h1_a = sum(a_lines[:2])
+                if bet["pick_team"] == h_name:
+                    did_win = (h1_h + bet["line"]) > h1_a
+                else:
+                    did_win = (h1_a + bet["line"]) > h1_h
             elif mkt == "FG_TOTAL" and is_final:
                 fg_tot = h_pts + a_pts
                 did_win = (fg_tot > bet["line"]) if bet["pick_dir"] == "Over" else (fg_tot < bet["line"])

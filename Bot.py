@@ -1025,8 +1025,11 @@ def scan_all_fanduel_markets():
 
                                 edge = win_prob - american_to_implied_prob(juice)
                                 if edge >= MIN_EDGE_TO_POST:
-                                    ev_pct = edge * 100.0
                                     dot = get_matchup_dot(opp_def_rk, pick_dir)
+                                    # Skip contra-matchup Red badge props
+                                    if dot == "🔴":
+                                        continue
+                                    ev_pct = edge * 100.0
                                     base_text = (
                                         f"**{p_name} — {pick_dir} {line} {stat_code}** `({juice:+d})`\n"
                                         f"🔥 **+{ev_pct:.1f}% EV**  •  📊 Szn: **{szn_avg:.1f}** *(L10: {l10_avg:.1f} | Proj: {lambda_proj:.1f})*\n"
@@ -1047,14 +1050,26 @@ def check_scores_and_grade_all_markets():
     if not pending:
         return
 
-    espn_url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
-    try:
-        res = requests.get(espn_url, timeout=10).json()
-    except:
-        return
+    # Check both Yesterday and Today in Central Time so late West Coast games always grade
+    central_tz = pytz.timezone("America/Chicago")
+    now_ct = datetime.now(timezone.utc).astimezone(central_tz)
+    date_pairs = [
+        ((now_ct - timedelta(days=1)).strftime("%Y%m%d"), (now_ct - timedelta(days=1)).strftime("%Y-%m-%d")),
+        (now_ct.strftime("%Y%m%d"), now_ct.strftime("%Y-%m-%d"))
+    ]
+
+    events_with_dates = []
+    for d_espn, d_iso in date_pairs:
+        try:
+            espn_url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={d_espn}"
+            res = requests.get(espn_url, timeout=10).json()
+            for ev in res.get("events", []):
+                events_with_dates.append((d_iso, ev))
+        except:
+            continue
 
     updated = False
-    for event in res.get("events", []):
+    for d_iso, event in events_with_dates:
         is_final = event["status"]["type"]["completed"]
         period = event["status"].get("period", 0)
         comp = event["competitions"][0]
@@ -1073,7 +1088,13 @@ def check_scores_and_grade_all_markets():
         a_lines = [float(x.get("displayValue") or x.get("value") or 0) for x in away_c.get("linescores", [])]
 
         player_stats_map = {}
-        has_props = any(b["status"] == "PENDING" and b["market"] == "PLAYER_PROP" and b["home"] == h_name for b in tracked_bets)
+        has_props = any(
+            b["status"] == "PENDING"
+            and b["market"] == "PLAYER_PROP"
+            and b["home"] == h_name
+            and b["bet_key"].startswith(d_iso)
+            for b in tracked_bets
+        )
         if is_final and has_props:
             sum_url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event={event['id']}"
             try:
@@ -1097,7 +1118,12 @@ def check_scores_and_grade_all_markets():
                 pass
 
         for bet in tracked_bets:
-            if bet["status"] != "PENDING" or bet["home"] != h_name or bet["away"] != a_name:
+            if (
+                bet["status"] != "PENDING"
+                or bet["home"] != h_name
+                or bet["away"] != a_name
+                or not bet["bet_key"].startswith(d_iso)
+            ):
                 continue
 
             did_win = None

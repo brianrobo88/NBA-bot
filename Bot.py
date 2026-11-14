@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 import pytz
 
 # ==========================================
-# 1. CREDENTIALS & 15.0% MINIMUM EV FILTER
+# 1. CREDENTIALS & SEPARATE EV FILTERS
 # ==========================================
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
 THE_ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY", "9ecb23956a7654b951782fd28ec3a8b5").strip()
@@ -20,23 +20,27 @@ SCAN_HALVES_QUARTERS = True   # 1st Half & 1st Quarter Spreads & Totals
 SCAN_PLAYER_PROPS = True      # Starters & Role Players: PTS, REB, AST
 SCAN_PRA_AND_3PM = False      # Optional: Set True to also scan PRA & 3PM (uses +2 credits/game)
 
+# Separate Minimum EV Filters
+MIN_EDGE_TEAM_MARKETS = 0.080 # 8.0% Minimum EV for Full-Game & 1Q/1H Spreads and Totals
+MIN_EDGE_PLAYER_PROPS = 0.150 # 15.0% Minimum EV for Player Props
+
 # Up to 10 bookmakers cost the exact same 1-region credit in The Odds API
 BOOKMAKERS_LIST = "fanduel,draftkings,betmgm,caesars"
 
 MAX_DEEP_SCAN_GAMES_PER_RUN = 8
-MIN_EDGE_TO_POST = 0.150      # STRICT 15.0% OR BETTER +EV FILTER
 LOOKBACK_DAYS_FOR_STATS = 25  # Covers full season-to-date + rolling L10/L5 game logs
 
-# Minimum Prop Line Filters (Avoids micro-line traps)
-MIN_PROP_LINE_PTS = 6.5
-MIN_PROP_LINE_OTHER = 2.5
+# Minimum Prop Line & Minutes Filters (Avoids micro-line & deep-bench traps)
+MIN_PROP_LINE_PTS = 7.5
+MIN_PROP_LINE_OTHER = 3.5
 MIN_PROP_LINE_3PM = 1.5
+MIN_PLAYER_AVG_MINUTES = 16.0 # Requires player to average 16+ MPG to avoid garbage-time traps
 
 TRACKER_FILE = "tracked_all_markets.json"
 SCANNED_EVENTS_FILE = "scanned_prop_events.json"
 LIVE_STATS_CACHE_FILE = "live_nba_stats_cache.json"
 RECAP_POSTED_FILE = "daily_recaps_posted.json"
-CACHE_SCHEMA_VERSION = "v5_dvp_devig_recap"
+CACHE_SCHEMA_VERSION = "v6_gtd_spot_starter_guard"
 
 SCORE_CHECK_SECONDS = 300     # Checks ESPN scores every 5 mins (FREE)
 FANDUEL_SCAN_SECONDS = 7200   # Scans FanDuel every 2 hours
@@ -177,7 +181,6 @@ def get_devigged_total_or_prop_consensus(other_books, market_key, pick_dir, fd_l
                 if tot_vig > 0:
                     fair_over = p_over_raw / tot_vig
                     fair_pick = fair_over if pick_dir == "Over" else (1.0 - fair_over)
-                    # Adjust fair probability slightly if book's line differs by 0.5-1.0 pt from FanDuel
                     line_diff = b_line - fd_line
                     if abs(line_diff) <= 1.5:
                         adj = (line_diff * 0.035) if pick_dir == "Over" else (-line_diff * 0.035)
@@ -384,6 +387,10 @@ def get_fallback_player_baselines():
         "Jarrett Allen": {"PTS": 14.6, "REB": 10.8, "AST": 2.1, "POS": "C", "TEAM": "Cleveland Cavaliers"},
         "Caris LeVert": {"PTS": 11.8, "REB": 3.4, "AST": 4.2, "POS": "G", "TEAM": "Cleveland Cavaliers"},
         "Dean Wade": {"PTS": 6.2, "REB": 4.2, "AST": 1.6, "POS": "F", "TEAM": "Cleveland Cavaliers"},
+        "Jaylon Tyson": {"PTS": 8.3, "REB": 3.0, "AST": 1.8, "POS": "G", "TEAM": "Cleveland Cavaliers"},
+        "Thomas Bryant": {"PTS": 8.7, "REB": 2.0, "AST": 0.8, "POS": "C", "TEAM": "Cleveland Cavaliers"},
+        "Mario Hezonja": {"PTS": 7.5, "REB": 5.3, "AST": 1.5, "POS": "F", "TEAM": "Cleveland Cavaliers"},
+        "Craig Porter Jr": {"PTS": 1.4, "REB": 1.7, "AST": 1.4, "POS": "G", "TEAM": "Cleveland Cavaliers"},
         "Tyrese Maxey": {"PTS": 27.6, "REB": 3.8, "AST": 6.4, "POS": "G", "TEAM": "Philadelphia 76ers"},
         "Joel Embiid": {"PTS": 26.8, "REB": 10.4, "AST": 4.8, "POS": "C", "TEAM": "Philadelphia 76ers"},
         "Paul George": {"PTS": 18.6, "REB": 5.6, "AST": 4.4, "POS": "F", "TEAM": "Philadelphia 76ers"},
@@ -500,7 +507,7 @@ def fetch_espn_season_averages():
                 threes = stat_dict.get("avgThreePointFieldGoalsMade", 1.2)
                 mins = stat_dict.get("avgMinutes", 20.0)
 
-                if pts is not None and reb is not None and ast is not None and mins >= 10.0:
+                if pts is not None and reb is not None and ast is not None and mins >= 8.0:
                     season_map[norm_p] = {
                         "PTS": round(float(pts), 2),
                         "REB": round(float(reb), 2),
@@ -544,7 +551,7 @@ def sync_live_nba_data():
             cached["fatigue_map"]
         )
 
-    print("🔄 Syncing V5 NBA Engine: ESPN Season Stats, Empirical DvP (G/F/C), 3-in-4/OT Fatigue, & Period Splits...")
+    print("🔄 Syncing V6 NBA Engine: ESPN Season Stats, Empirical DvP (G/F/C), GTD/Spot-Starter Safeguards...")
 
     # 1. Layer Official ESPN Season Averages on top of Fallback Dictionary
     espn_season_stats = fetch_espn_season_averages()
@@ -575,8 +582,8 @@ def sync_live_nba_data():
     for norm_p, p_data in player_db.items():
         p_data.setdefault("3PM", round(p_data["PTS"] * 0.09, 2))
         p_data.setdefault("PRA", round(p_data["PTS"] + p_data["REB"] + p_data["AST"], 2))
-        p_data.setdefault("SZN_MIN", 26.0)
-        p_data.setdefault("L5_MIN", 26.0)
+        p_data.setdefault("SZN_MIN", 24.0)
+        p_data.setdefault("L5_MIN", 24.0)
         for k in ["PTS", "REB", "AST", "3PM", "PRA"]:
             p_data.setdefault(f"SZN_{k}", p_data[k])
             p_data.setdefault(f"L10_{k}", p_data[k])
@@ -732,7 +739,6 @@ def sync_live_nba_data():
         except:
             continue
 
-    # Build Fatigue Map (B2B, 3-in-4, OT Hangover)
     fatigue_map = {}
     for t_name, days_list in recent_days_played.items():
         unique_days = sorted(list(set(days_list)))
@@ -757,7 +763,7 @@ def sync_live_nba_data():
 
     # Blend 50% Official Season Avg (SZN) + 50% Last 10 Games (L10) & Track L5 Minute Trends
     for norm_p, logs in player_logs.items():
-        if len(logs["PTS"]) >= 3 and float(np.mean(logs["MIN"])) >= 12.0:
+        if len(logs["PTS"]) >= 2:
             full_pts = float(np.mean(logs["PTS"]))
             full_reb = float(np.mean(logs["REB"]))
             full_ast = float(np.mean(logs["AST"]))
@@ -842,7 +848,6 @@ def sync_live_nba_data():
             "PRA": pts_sorted.index(t_name) + 1
         }
 
-    # Compute Empirical Defense-vs-Position (G / F / C) Multipliers & Rankings (#1 - #30)
     pos_avgs = {pos: {} for pos in ["G", "F", "C"]}
     team_pos_vals = {t: {pos: {} for pos in ["G", "F", "C"]} for t in team_db}
 
@@ -859,7 +864,6 @@ def sync_live_nba_data():
             for t_name in team_db:
                 vals = opp_pos_allowed_logs[t_name][pos][stat]
                 raw_pos_mean = float(np.mean(vals)) if len(vals) >= 2 else league_pos_avg
-                # 65% empirical boxscore DvP + 35% league positional mean anchor
                 team_pos_vals[t_name][pos][stat] = 0.65 * raw_pos_mean + 0.35 * league_pos_avg
 
     pos_ranks = {t: {pos: {} for pos in ["G", "F", "C"]} for t in team_db}
@@ -882,26 +886,33 @@ def sync_live_nba_data():
         "pos_def_mults": pos_def_mults,
         "fatigue_map": fatigue_map
     })
-    print(f"✅ Synced {len(player_db)} players, Empirical G/F/C DvP Rankings, & Fatigue Map!")
+    print(f"✅ Synced {len(player_db)} players, Empirical G/F/C DvP Rankings, & GTD/Spot-Starter Safeguards!")
     return team_db, player_db, opp_ranks, pos_ranks, pos_def_mults, fatigue_map
 
 def fetch_injured_players():
-    """Returns (prop_excluded_players, confirmed_out_or_doubtful_players)."""
+    """Returns (prop_excluded, confirmed_out, questionable_gtd) sets."""
     prop_excluded = set()
     confirmed_out = set()
+    questionable_gtd = set()
+
+    def classify_injury(p_name, status_str):
+        if not p_name:
+            return
+        norm_p = normalize_name(p_name)
+        s = status_str.lower()
+        if any(term in s for term in ["out", "doubtful", "injured", "suspension"]):
+            prop_excluded.add(norm_p)
+            confirmed_out.add(norm_p)
+        elif any(term in s for term in ["questionable", "day-to-day", "gtd", "game time decision"]):
+            prop_excluded.add(norm_p)
+            questionable_gtd.add(norm_p)
+
     try:
         inj_url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/injuries"
         res = requests.get(inj_url, timeout=10).json()
         for team_entry in res.get("injuries", []):
             for inj in team_entry.get("injuries", []):
-                p_name = inj.get("athlete", {}).get("displayName")
-                status = inj.get("status", "").lower()
-                if p_name:
-                    norm_p = normalize_name(p_name)
-                    if any(term in status for term in ["out", "doubtful", "questionable", "injured", "day-to-day"]):
-                        prop_excluded.add(norm_p)
-                    if any(term in status for term in ["out", "doubtful", "injured"]):
-                        confirmed_out.add(norm_p)
+                classify_injury(inj.get("athlete", {}).get("displayName"), inj.get("status", ""))
     except:
         pass
 
@@ -911,27 +922,28 @@ def fetch_injured_players():
         for event in res.get("events", []):
             for team in event["competitions"][0]["competitors"]:
                 for inj in team.get("injuries", []):
-                    p_name = inj.get("athlete", {}).get("displayName")
-                    status = inj.get("status", "").lower()
-                    if p_name:
-                        norm_p = normalize_name(p_name)
-                        if any(term in status for term in ["out", "doubtful", "questionable", "injured"]):
-                            prop_excluded.add(norm_p)
-                        if any(term in status for term in ["out", "doubtful", "injured"]):
-                            confirmed_out.add(norm_p)
+                    classify_injury(inj.get("athlete", {}).get("displayName"), inj.get("status", ""))
     except:
         pass
-    return prop_excluded, confirmed_out
+    return prop_excluded, confirmed_out, questionable_gtd
 
-def calc_team_injury_deduction(team_name, player_db, confirmed_out):
-    """Deducts projected team points when key scorers (12+ PPG) are Out/Doubtful."""
+def calc_team_injury_deduction(team_name, player_db, confirmed_out, questionable_gtd):
+    """Deducts projected team points for Out (100% weight) & Questionable/GTD (55% weight) scorers."""
     penalty = 0.0
+    gtd_star_count = 0
     for norm_p, p_data in player_db.items():
-        if p_data.get("TEAM") == team_name and norm_p in confirmed_out:
-            pts = p_data.get("SZN_PTS", p_data.get("PTS", 0.0))
-            if pts >= 12.0:
-                penalty += (pts - 8.5) * 0.18
-    return min(penalty, 7.5)
+        if p_data.get("TEAM") != team_name:
+            continue
+        pts = p_data.get("SZN_PTS", p_data.get("PTS", 0.0))
+        if pts < 11.5:
+            continue
+        if norm_p in confirmed_out:
+            penalty += (pts - 8.0) * 0.20
+        elif norm_p in questionable_gtd:
+            penalty += (pts - 8.0) * 0.11
+            if pts >= 13.5:
+                gtd_star_count += 1
+    return min(penalty, 14.5), gtd_star_count
 
 def calc_team_fatigue_penalty(team_name, is_home, fatigue_map):
     """Calculates graduated point penalty for B2B, 3-in-4, and OT hangover."""
@@ -940,43 +952,68 @@ def calc_team_fatigue_penalty(team_name, is_home, fatigue_map):
     if f_info.get("is_b2b"):
         pen += 1.9 if is_home else 2.5
     if f_info.get("is_3in4"):
-        pen += 0.9 if is_b2b_also(f_info) else (1.4 if is_home else 1.8)
+        pen += 0.9 if f_info.get("is_b2b") else (1.4 if is_home else 1.8)
     if f_info.get("is_ot"):
         pen += 0.8
     return min(pen, 4.2)
 
-def is_b2b_also(f_info):
-    return bool(f_info.get("is_b2b"))
-
-def calc_teammate_usage_boost(norm_p, team_name, stat_code, player_db, confirmed_out):
-    """Calculates 'Next Man Up' usage multiplier when high-usage teammates are Out/Doubtful."""
+def calc_teammate_usage_boost(norm_p, team_name, stat_code, player_db, confirmed_out, questionable_gtd):
+    """Calculates 'Next Man Up' usage multiplier (counts Out at 100% and GTD at 50%)."""
     if not team_name:
-        return 1.0
+        return 1.0, 0.0
     missing_pts = 0.0
     missing_ast = 0.0
     missing_reb = 0.0
     for other_p, p_data in player_db.items():
-        if other_p == norm_p or p_data.get("TEAM") != team_name or other_p not in confirmed_out:
+        if other_p == norm_p or p_data.get("TEAM") != team_name:
+            continue
+        weight = 1.0 if other_p in confirmed_out else (0.50 if other_p in questionable_gtd else 0.0)
+        if weight <= 0.0:
             continue
         pts = p_data.get("SZN_PTS", p_data.get("PTS", 0.0))
         ast = p_data.get("SZN_AST", p_data.get("AST", 0.0))
         reb = p_data.get("SZN_REB", p_data.get("REB", 0.0))
-        if pts >= 16.0:
-            missing_pts += pts
-        if ast >= 5.5:
-            missing_ast += ast
-        if reb >= 7.5:
-            missing_reb += reb
+        if pts >= 15.0:
+            missing_pts += pts * weight
+        if ast >= 5.0:
+            missing_ast += ast * weight
+        if reb >= 7.0:
+            missing_reb += reb * weight
 
+    total_missing_impact = missing_pts + missing_ast + missing_reb
     if stat_code in ["PTS", "3PM"] and missing_pts > 0:
-        return min(1.12, 1.0 + (missing_pts * 0.0028))
+        return min(1.14, 1.0 + (missing_pts * 0.0028)), total_missing_impact
     elif stat_code == "AST" and missing_ast > 0:
-        return min(1.14, 1.0 + (missing_ast * 0.0085))
+        return min(1.15, 1.0 + (missing_ast * 0.0085)), total_missing_impact
     elif stat_code == "REB" and missing_reb > 0:
-        return min(1.12, 1.0 + (missing_reb * 0.0065))
-    elif stat_code == "PRA" and (missing_pts + missing_ast + missing_reb) > 0:
-        return min(1.12, 1.0 + ((missing_pts + missing_ast + missing_reb) * 0.0022))
-    return 1.0
+        return min(1.14, 1.0 + (missing_reb * 0.0065)), total_missing_impact
+    elif stat_code == "PRA" and total_missing_impact > 0:
+        return min(1.14, 1.0 + (total_missing_impact * 0.0022)), total_missing_impact
+    return 1.0, total_missing_impact
+
+def is_spot_starter_under_trap(pick_dir, stat_code, line, szn_avg, l10_avg, szn_min, missing_team_impact):
+    """
+    Blocks Under bets on role players whose lines were inflated by sportsbooks
+    due to starters being Out or GTD (e.g., Jaylon Tyson 16.5 PTS vs 8.3 Szn Avg).
+    """
+    if pick_dir != "Under":
+        return False
+    anchor = max(szn_avg, l10_avg, 0.5)
+    # 1. If player averages < 16 MPG, never bet their Under (books only post lines for them on spot-starts)
+    if szn_min < MIN_PLAYER_AVG_MINUTES:
+        return True
+    # 2. If sportsbook line is 30%+ higher than player's highest baseline, book is pricing a role spike
+    if line >= (anchor * 1.30):
+        return True
+    # 3. Absolute point-jump guard for PTS, REB, AST
+    if stat_code == "PTS" and (line - anchor) >= 3.8:
+        return True
+    if stat_code in ["REB", "AST"] and (line - anchor) >= 1.8:
+        return True
+    # 4. If team has heavy Out/GTD impact (25+ combined missing stats) and player is a bench/role player (< 26 MPG), skip Under
+    if missing_team_impact >= 25.0 and szn_min < 26.5:
+        return True
+    return False
 
 def get_matchup_dot(opp_rank, pick_dir):
     if pick_dir == "Over":
@@ -997,7 +1034,7 @@ def scan_all_fanduel_markets():
     tracked_bets = load_json(TRACKER_FILE, [])
     already_posted = {b["bet_key"] for b in tracked_bets}
     scanned_events = set(load_json(SCANNED_EVENTS_FILE, []))
-    prop_excluded, confirmed_out = fetch_injured_players()
+    prop_excluded, confirmed_out, questionable_gtd = fetch_injured_players()
 
     stats_db, player_db, opp_ranks, pos_ranks, pos_def_mults, fatigue_map = sync_live_nba_data()
     avg_off = float(np.mean([v["off"] for v in stats_db.values()]))
@@ -1021,7 +1058,7 @@ def scan_all_fanduel_markets():
     }
 
     res = requests.get(url, params=params, timeout=10)
-    print(f"📊 V5 Multi-Book FanDuel Sync for {today_ct_str}! (Credits Remaining: {res.headers.get('x-requests-remaining')})")
+    print(f"📊 V6 Multi-Book FanDuel Sync for {today_ct_str}! (Credits Remaining: {res.headers.get('x-requests-remaining')})")
     if res.status_code != 200:
         return
 
@@ -1061,9 +1098,9 @@ def scan_all_fanduel_markets():
         raw_h_pts = ((h_stats["off"] + a_stats["def"]) / 2.0) * pace_scaler
         raw_a_pts = ((a_stats["off"] + h_stats["def"]) / 2.0) * pace_scaler
 
-        # 2. Star Injury & Graduated Schedule Fatigue (B2B / 3-in-4 / OT)
-        h_inj_pen = calc_team_injury_deduction(home, player_db, confirmed_out)
-        a_inj_pen = calc_team_injury_deduction(away, player_db, confirmed_out)
+        # 2. Star Injury (Out + 55% GTD Weight) & Schedule Fatigue
+        h_inj_pen, h_gtd_stars = calc_team_injury_deduction(home, player_db, confirmed_out, questionable_gtd)
+        a_inj_pen, a_gtd_stars = calc_team_injury_deduction(away, player_db, confirmed_out, questionable_gtd)
 
         h_fat_pen = calc_team_fatigue_penalty(home, True, fatigue_map)
         a_fat_pen = calc_team_fatigue_penalty(away, False, fatigue_map)
@@ -1079,12 +1116,12 @@ def scan_all_fanduel_markets():
 
         fg_spread_abs = abs(model_margin)
 
-        # --- A. FULL-GAME TOTALS & SPREADS ---
+        # --- A. FULL-GAME TOTALS & SPREADS (8.0% EV THRESHOLD) ---
         if SCAN_FULL_GAME:
             for m in fd_markets:
                 if m["key"] == "totals":
                     bet_key = f"{match_key}_FG_TOTAL"
-                    if bet_key not in already_posted:
+                    if bet_key not in already_posted and (h_gtd_stars + a_gtd_stars) < 3:
                         over_o = next((o for o in m["outcomes"] if o["name"] == "Over"), None)
                         under_o = next((o for o in m["outcomes"] if o["name"] == "Under"), None)
                         if over_o and under_o:
@@ -1097,13 +1134,13 @@ def scan_all_fanduel_markets():
                             if mkt_cons is not None:
                                 if (pick_dir == "Over" and (mkt_cons - line) <= -1.5) or (pick_dir == "Under" and (mkt_cons - line) >= 1.5):
                                     continue
-                            if mkt_prob is not None and mkt_prob < 0.45:
+                            if mkt_prob is not None and mkt_prob < 0.46:
                                 continue
 
                             stat_win_prob = norm.cdf(abs(diff) / NBA_STD_DEV_TOTAL)
                             win_prob = (0.80 * stat_win_prob + 0.20 * mkt_prob) if mkt_prob is not None else stat_win_prob
                             edge = win_prob - american_to_implied_prob(juice)
-                            if edge >= MIN_EDGE_TO_POST:
+                            if edge >= MIN_EDGE_TEAM_MARKETS:
                                 ev_pct = edge * 100.0
                                 units = calc_kelly_units(win_prob, juice)
                                 mkt_str = f" *(Mkt: {mkt_cons:.1f})*" if mkt_cons is not None else ""
@@ -1129,6 +1166,12 @@ def scan_all_fanduel_markets():
                             sp_diff = model_margin - (-h_line)
                             pick_team = home if sp_diff >= 0 else away
                             opp_team = away if sp_diff >= 0 else home
+                            pick_gtd_stars = h_gtd_stars if pick_team == home else a_gtd_stars
+
+                            # Freeze backing a team on the spread if 2+ key scorers are GTD
+                            if pick_gtd_stars >= 2:
+                                continue
+
                             pick_ab = get_abbr(pick_team)
                             opp_ab = get_abbr(opp_team)
                             pick_line = h_line if sp_diff >= 0 else float(away_o["point"])
@@ -1137,13 +1180,13 @@ def scan_all_fanduel_markets():
                             mkt_cons, mkt_prob = get_devigged_spread_consensus(other_books, "spreads", pick_team, pick_line)
                             if mkt_cons is not None and (pick_line - mkt_cons) <= -1.5:
                                 continue
-                            if mkt_prob is not None and mkt_prob < 0.45:
+                            if mkt_prob is not None and mkt_prob < 0.46:
                                 continue
 
                             stat_win_prob = norm.cdf(abs(sp_diff) / NBA_STD_DEV_SPREAD)
                             win_prob = (0.80 * stat_win_prob + 0.20 * mkt_prob) if mkt_prob is not None else stat_win_prob
                             edge = win_prob - american_to_implied_prob(juice)
-                            if edge >= MIN_EDGE_TO_POST:
+                            if edge >= MIN_EDGE_TEAM_MARKETS:
                                 ev_pct = edge * 100.0
                                 units = calc_kelly_units(win_prob, juice)
                                 opp_def_rk = opp_ranks.get(opp_team, {}).get("PTS", 15)
@@ -1203,6 +1246,8 @@ def scan_all_fanduel_markets():
                     m_key = m["key"]
 
                     if m_key in ["totals_h1", "totals_q1"]:
+                        if (h_gtd_stars + a_gtd_stars) >= 3:
+                            continue
                         is_q1 = (m_key == "totals_q1")
                         period_label = "1Q" if is_q1 else "1H"
                         std_dev = NBA_STD_DEV_Q1_TOTAL if is_q1 else NBA_STD_DEV_H1_TOTAL
@@ -1221,14 +1266,14 @@ def scan_all_fanduel_markets():
                             if mkt_cons is not None:
                                 if (pick_dir == "Over" and (mkt_cons - line) <= -1.5) or (pick_dir == "Under" and (mkt_cons - line) >= 1.5):
                                     continue
-                            if mkt_prob is not None and mkt_prob < 0.45:
+                            if mkt_prob is not None and mkt_prob < 0.46:
                                 continue
 
                             stat_win_prob = norm.cdf(abs(diff) / std_dev)
                             win_prob = (0.80 * stat_win_prob + 0.20 * mkt_prob) if mkt_prob is not None else stat_win_prob
                             edge = win_prob - american_to_implied_prob(juice)
 
-                            if edge >= MIN_EDGE_TO_POST:
+                            if edge >= MIN_EDGE_TEAM_MARKETS:
                                 ev_pct = edge * 100.0
                                 units = calc_kelly_units(win_prob, juice)
                                 mkt_str = f" *(Mkt: {mkt_cons:.1f})*" if mkt_cons is not None else ""
@@ -1259,6 +1304,10 @@ def scan_all_fanduel_markets():
                             sp_diff = p_margin - (-h_line)
 
                             pick_team = home if sp_diff >= 0 else away
+                            pick_gtd_stars = h_gtd_stars if pick_team == home else a_gtd_stars
+                            if pick_gtd_stars >= 2:
+                                continue
+
                             pick_ab = get_abbr(pick_team)
                             pick_line = h_line if sp_diff >= 0 else float(away_o["point"])
                             juice = int(home_o["price"]) if sp_diff >= 0 else int(away_o["price"])
@@ -1266,14 +1315,14 @@ def scan_all_fanduel_markets():
                             mkt_cons, mkt_prob = get_devigged_spread_consensus(other_ev_books, m_key, pick_team, pick_line)
                             if mkt_cons is not None and (pick_line - mkt_cons) <= -1.5:
                                 continue
-                            if mkt_prob is not None and mkt_prob < 0.45:
+                            if mkt_prob is not None and mkt_prob < 0.46:
                                 continue
 
                             stat_win_prob = norm.cdf(abs(sp_diff) / std_dev)
                             win_prob = (0.80 * stat_win_prob + 0.20 * mkt_prob) if mkt_prob is not None else stat_win_prob
                             edge = win_prob - american_to_implied_prob(juice)
 
-                            if edge >= MIN_EDGE_TO_POST:
+                            if edge >= MIN_EDGE_TEAM_MARKETS:
                                 ev_pct = edge * 100.0
                                 units = calc_kelly_units(win_prob, juice)
                                 fair_p = -p_margin if pick_team == home else p_margin
@@ -1320,7 +1369,7 @@ def scan_all_fanduel_markets():
                                 continue
                             elif stat_code in ["REB", "AST"] and line < MIN_PROP_LINE_OTHER:
                                 continue
-                            elif stat_code == "PRA" and line < 12.5:
+                            elif stat_code == "PRA" and line < 14.5:
                                 continue
 
                             p_info = player_db[norm_p]
@@ -1329,58 +1378,41 @@ def scan_all_fanduel_markets():
                                 continue
                             szn_avg = p_info.get(f"SZN_{stat_code}", base_avg)
                             l10_avg = p_info.get(f"L10_{stat_code}", base_avg)
-                            szn_min = p_info.get("SZN_MIN", 26.0)
+                            szn_min = p_info.get("SZN_MIN", 24.0)
                             l5_min = p_info.get("L5_MIN", szn_min)
                             p_pos = p_info.get("POS", "G")
                             p_team = p_info.get("TEAM", "")
+
+                            # Skip players whose team wasn't matched to either team in the game
+                            if p_team not in [home, away]:
+                                continue
 
                             # --- 1. TRUE SINGLE-OPPONENT + EMPIRICAL DvP (G/F/C) MAPPING ---
                             dvp_stat_key = "PTS" if stat_code in ["PTS", "3PM", "PRA"] else stat_code
                             if p_team == home:
                                 opp_team_name, opp_s, opp_r, opp_ab_str = away, a_stats, a_ranks, a_ab
-                            elif p_team == away:
-                                opp_team_name, opp_s, opp_r, opp_ab_str = home, h_stats, h_ranks, h_ab
                             else:
-                                opp_team_name = ""
-                                opp_s = {
-                                    "def": (h_stats["def"] + a_stats["def"]) / 2.0,
-                                    "opp_reb": (h_stats["opp_reb"] + a_stats["opp_reb"]) / 2.0,
-                                    "opp_ast": (h_stats["opp_ast"] + a_stats["opp_ast"]) / 2.0
-                                }
-                                opp_r = {
-                                    "PTS": int(round((h_ranks["PTS"] + a_ranks["PTS"]) / 2.0)),
-                                    "REB": int(round((h_ranks["REB"] + a_ranks["REB"]) / 2.0)),
-                                    "AST": int(round((h_ranks["AST"] + a_ranks["AST"]) / 2.0))
-                                }
-                                opp_ab_str = f"{a_ab}/{h_ab}"
+                                opp_team_name, opp_s, opp_r, opp_ab_str = home, h_stats, h_ranks, h_ab
 
                             if stat_code in ["PTS", "3PM", "PRA"]:
                                 team_def_mult = opp_s["def"] / avg_off
                                 opp_def_rk = opp_r["PTS"]
-                                opp_stat_val = opp_s["def"]
                             elif stat_code == "REB":
                                 team_def_mult = opp_s["opp_reb"] / avg_opp_reb
                                 opp_def_rk = opp_r["REB"]
-                                opp_stat_val = opp_s["opp_reb"]
                             else:
                                 team_def_mult = opp_s["opp_ast"] / avg_opp_ast
                                 opp_def_rk = opp_r["AST"]
-                                opp_stat_val = opp_s["opp_ast"]
 
-                            if opp_team_name and opp_team_name in pos_def_mults:
-                                emp_pos_mult = pos_def_mults[opp_team_name].get(p_pos, {}).get(dvp_stat_key, team_def_mult)
-                                emp_pos_rk = pos_ranks.get(opp_team_name, {}).get(p_pos, {}).get(dvp_stat_key, opp_def_rk)
-                            else:
-                                emp_pos_mult = team_def_mult
-                                emp_pos_rk = opp_def_rk
+                            emp_pos_mult = pos_def_mults.get(opp_team_name, {}).get(p_pos, {}).get(dvp_stat_key, team_def_mult)
+                            emp_pos_rk = pos_ranks.get(opp_team_name, {}).get(p_pos, {}).get(dvp_stat_key, opp_def_rk)
 
-                            # 50% Team-Wide Defense + 50% Empirical Position Defense
                             matchup_mult = (0.50 * team_def_mult) + (0.50 * emp_pos_mult)
                             blended_def_rk = int(round(0.50 * opp_def_rk + 0.50 * emp_pos_rk))
 
                             # --- 2. MINUTE-TREND SCALING & NEXT-MAN-UP USAGE BOOST ---
                             min_trend_mult = float(np.clip(l5_min / max(12.0, szn_min), 0.90, 1.12))
-                            usage_boost_mult = calc_teammate_usage_boost(norm_p, p_team, stat_code, player_db, confirmed_out)
+                            usage_boost_mult, missing_team_impact = calc_teammate_usage_boost(norm_p, p_team, stat_code, player_db, confirmed_out, questionable_gtd)
 
                             pace_mult = exp_pace / avg_pace
                             lambda_proj = base_avg * (0.75 * matchup_mult + 0.25 * pace_mult) * (0.50 + 0.50 * min_trend_mult) * usage_boost_mult
@@ -1402,7 +1434,11 @@ def scan_all_fanduel_markets():
                             else:
                                 pick_dir, stat_win_prob, juice = "Under", prob_under, int(sides["Under"]["price"])
 
-                            # --- 4. DE-VIGGED MULTI-BOOK CONSENSUS & JUICE CHECK ---
+                            # --- 4. SPOT-STARTER / INFLATED BENCH LINE UNDER SAFEGUARD ---
+                            if is_spot_starter_under_trap(pick_dir, stat_code, line, szn_avg, l10_avg, szn_min, missing_team_impact):
+                                continue
+
+                            # --- 5. DE-VIGGED MULTI-BOOK CONSENSUS & JUICE CHECK ---
                             mkt_cons, mkt_prob = get_devigged_total_or_prop_consensus(other_ev_books, m_key, pick_dir, line, p_name)
                             if mkt_cons is not None:
                                 if (pick_dir == "Over" and (mkt_cons - line) <= -1.5) or (pick_dir == "Under" and (mkt_cons - line) >= 1.5):
@@ -1412,13 +1448,13 @@ def scan_all_fanduel_markets():
 
                             win_prob = (0.80 * stat_win_prob + 0.20 * mkt_prob) if mkt_prob is not None else stat_win_prob
                             edge = win_prob - american_to_implied_prob(juice)
-                            if edge >= MIN_EDGE_TO_POST:
+                            if edge >= MIN_EDGE_PLAYER_PROPS:
                                 dot = get_matchup_dot(blended_def_rk, pick_dir)
                                 if dot == "🔴":
                                     continue
                                 ev_pct = edge * 100.0
                                 units = calc_kelly_units(win_prob, juice)
-                                usage_tag = " ⚡+Usage" if usage_boost_mult >= 1.04 else ""
+                                usage_tag = " ⚡+Usage" if (usage_boost_mult >= 1.04 and pick_dir == "Over") else ""
                                 base_text = (
                                     f"**{p_name} — {pick_dir} {line} {stat_code}** `({juice:+d})`\n"
                                     f"🔥 **+{ev_pct:.1f}% EV** `({units:.1f}u)`  •  📊 Szn: **{szn_avg:.1f}** *(L10: {l10_avg:.1f} | Proj: {lambda_proj:.1f})*\n"
@@ -1622,7 +1658,7 @@ def check_scores_and_grade_all_markets():
     post_daily_recaps_if_complete(tracked_bets)
 
 if __name__ == "__main__":
-    print("🤖 LIVE NBA 15%+ EV BOT (V5 DVP + DE-VIG + RECAP ENGINE) IS LIVE!")
+    print("🤖 LIVE NBA EV BOT (V6 SPOT-STARTER & GTD SAFEGUARD ENGINE) IS LIVE!")
     last_scan = 0
     while True:
         now_ts = time.time()

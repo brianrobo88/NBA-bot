@@ -40,7 +40,7 @@ TRACKER_FILE = "tracked_all_markets.json"
 SCANNED_EVENTS_FILE = "scanned_prop_events.json"
 LIVE_STATS_CACHE_FILE = "live_nba_stats_cache.json"
 RECAP_POSTED_FILE = "daily_recaps_posted.json"
-CACHE_SCHEMA_VERSION = "v6_gtd_spot_starter_guard"
+CACHE_SCHEMA_VERSION = "v7_active_rotation_guard"
 
 SCORE_CHECK_SECONDS = 300     # Checks ESPN scores every 5 mins (FREE)
 FANDUEL_SCAN_SECONDS = 7200   # Scans FanDuel every 2 hours
@@ -291,11 +291,12 @@ def get_fallback_player_baselines():
         "Donovan Clingan": {"PTS": 7.8, "REB": 7.4, "AST": 1.2, "POS": "C", "TEAM": "Portland Trail Blazers"},
         "Stephen Curry": {"PTS": 26.4, "REB": 4.5, "AST": 5.2, "POS": "G", "TEAM": "Golden State Warriors"},
         "Draymond Green": {"PTS": 8.8, "REB": 6.8, "AST": 6.2, "POS": "F", "TEAM": "Golden State Warriors"},
-        "Andrew Wiggins": {"PTS": 16.4, "REB": 4.8, "AST": 2.1, "POS": "F", "TEAM": "Golden State Warriors"},
+        "Andrew Wiggins": {"PTS": 16.4, "REB": 4.8, "AST": 2.1, "POS": "F", "TEAM": "Miami Heat"},
         "Jonathan Kuminga": {"PTS": 15.8, "REB": 4.6, "AST": 2.2, "POS": "F", "TEAM": "Golden State Warriors"},
         "Buddy Hield": {"PTS": 14.6, "REB": 3.4, "AST": 2.1, "POS": "G", "TEAM": "Golden State Warriors"},
         "Brandin Podziemski": {"PTS": 10.2, "REB": 5.1, "AST": 4.2, "POS": "G", "TEAM": "Golden State Warriors"},
         "Trayce Jackson-Davis": {"PTS": 8.9, "REB": 6.4, "AST": 1.8, "POS": "C", "TEAM": "Golden State Warriors"},
+        "Jimmy Butler": {"PTS": 18.8, "REB": 5.4, "AST": 4.8, "POS": "F", "TEAM": "Golden State Warriors"},
         "Kevin Durant": {"PTS": 27.4, "REB": 6.6, "AST": 4.8, "POS": "F", "TEAM": "Houston Rockets"},
         "Alperen Sengun": {"PTS": 21.6, "REB": 11.2, "AST": 5.1, "POS": "C", "TEAM": "Houston Rockets"},
         "Jalen Green": {"PTS": 22.4, "REB": 4.8, "AST": 3.4, "POS": "G", "TEAM": "Houston Rockets"},
@@ -325,7 +326,7 @@ def get_fallback_player_baselines():
         "D'Angelo Russell": {"PTS": 14.2, "REB": 2.8, "AST": 5.6, "POS": "G", "TEAM": "Los Angeles Lakers"},
         "Dalton Knecht": {"PTS": 11.4, "REB": 3.2, "AST": 1.4, "POS": "G", "TEAM": "Los Angeles Lakers"},
         "James Harden": {"PTS": 21.4, "REB": 5.8, "AST": 8.9, "POS": "G", "TEAM": "Cleveland Cavaliers"},
-        "Norman Powell": {"PTS": 22.6, "REB": 3.4, "AST": 2.4, "POS": "G", "TEAM": "Los Angeles Clippers"},
+        "Norman Powell": {"PTS": 22.6, "REB": 3.4, "AST": 2.4, "POS": "G", "TEAM": "Chicago Bulls"},
         "Ivica Zubac": {"PTS": 15.8, "REB": 12.2, "AST": 2.4, "POS": "C", "TEAM": "Los Angeles Clippers"},
         "Derrick Jones Jr": {"PTS": 10.2, "REB": 3.6, "AST": 1.1, "POS": "F", "TEAM": "Los Angeles Clippers"},
         "Terance Mann": {"PTS": 8.4, "REB": 3.4, "AST": 2.1, "POS": "G", "TEAM": "Los Angeles Clippers"},
@@ -337,7 +338,7 @@ def get_fallback_player_baselines():
         "Russell Westbrook": {"PTS": 11.4, "REB": 4.6, "AST": 5.8, "POS": "G", "TEAM": "Denver Nuggets"},
         "Luka Doncic": {"PTS": 34.5, "REB": 9.1, "AST": 9.6, "POS": "G", "TEAM": "Los Angeles Lakers"},
         "Kyrie Irving": {"PTS": 25.4, "REB": 4.9, "AST": 5.3, "POS": "G", "TEAM": "Dallas Mavericks"},
-        "Klay Thompson": {"PTS": 14.2, "REB": 3.4, "AST": 2.0, "POS": "G", "TEAM": "Dallas Mavericks"},
+        "Klay Thompson": {"PTS": 14.2, "REB": 3.4, "AST": 2.0, "POS": "G", "TEAM": "Miami Heat"},
         "PJ Washington": {"PTS": 12.4, "REB": 7.6, "AST": 1.9, "POS": "F", "TEAM": "Dallas Mavericks"},
         "Daniel Gafford": {"PTS": 11.8, "REB": 7.2, "AST": 1.4, "POS": "C", "TEAM": "Dallas Mavericks"},
         "Dereck Lively II": {"PTS": 9.4, "REB": 7.8, "AST": 2.1, "POS": "C", "TEAM": "Dallas Mavericks"},
@@ -377,7 +378,7 @@ def get_fallback_player_baselines():
         "Cam Spencer": {"PTS": 9.3, "REB": 3.3, "AST": 4.8, "POS": "G", "TEAM": "Memphis Grizzlies"},
         "GG Jackson": {"PTS": 7.8, "REB": 3.4, "AST": 1.2, "POS": "F", "TEAM": "Memphis Grizzlies"},
         "Cedric Coward": {"PTS": 11.2, "REB": 7.8, "AST": 2.1, "POS": "F", "TEAM": "Memphis Grizzlies"},
-        "Giannis Antetokounmpo": {"PTS": 30.8, "REB": 11.6, "AST": 6.1, "POS": "F", "TEAM": "Milwaukee Bucks"},
+        "Giannis Antetokounmpo": {"PTS": 30.8, "REB": 11.6, "AST": 6.1, "POS": "F", "TEAM": "Miami Heat"},
         "Bobby Portis": {"PTS": 13.4, "REB": 7.8, "AST": 1.4, "POS": "F", "TEAM": "Milwaukee Bucks"},
         "Brook Lopez": {"PTS": 11.8, "REB": 5.2, "AST": 1.6, "POS": "C", "TEAM": "Milwaukee Bucks"},
         "Gary Trent Jr": {"PTS": 11.2, "REB": 2.6, "AST": 1.6, "POS": "G", "TEAM": "Milwaukee Bucks"},
@@ -398,13 +399,12 @@ def get_fallback_player_baselines():
         "Jared McCain": {"PTS": 15.2, "REB": 2.6, "AST": 2.8, "POS": "G", "TEAM": "Philadelphia 76ers"},
         "Bam Adebayo": {"PTS": 20.2, "REB": 10.4, "AST": 4.1, "POS": "C", "TEAM": "Miami Heat"},
         "Tyler Herro": {"PTS": 23.4, "REB": 5.2, "AST": 4.8, "POS": "G", "TEAM": "Miami Heat"},
-        "Jimmy Butler": {"PTS": 18.8, "REB": 5.4, "AST": 4.8, "POS": "F", "TEAM": "Miami Heat"},
         "Terry Rozier": {"PTS": 13.4, "REB": 3.8, "AST": 4.2, "POS": "G", "TEAM": "Miami Heat"},
         "Jaime Jaquez Jr": {"PTS": 10.8, "REB": 4.8, "AST": 2.4, "POS": "F", "TEAM": "Miami Heat"},
         "Duncan Robinson": {"PTS": 11.8, "REB": 2.4, "AST": 2.2, "POS": "G", "TEAM": "Detroit Pistons"},
         "Tyrese Haliburton": {"PTS": 21.4, "REB": 3.9, "AST": 10.4, "POS": "G", "TEAM": "Indiana Pacers"},
         "Pascal Siakam": {"PTS": 20.6, "REB": 7.2, "AST": 3.8, "POS": "F", "TEAM": "Indiana Pacers"},
-        "Myles Turner": {"PTS": 15.8, "REB": 7.1, "AST": 1.6, "POS": "C", "TEAM": "Indiana Pacers"},
+        "Myles Turner": {"PTS": 15.8, "REB": 7.1, "AST": 1.6, "POS": "C", "TEAM": "Milwaukee Bucks"},
         "Bennedict Mathurin": {"PTS": 16.8, "REB": 5.8, "AST": 2.0, "POS": "G", "TEAM": "Indiana Pacers"},
         "Andrew Nembhard": {"PTS": 10.8, "REB": 3.1, "AST": 4.8, "POS": "G", "TEAM": "Indiana Pacers"},
         "TJ McConnell": {"PTS": 10.2, "REB": 2.6, "AST": 5.2, "POS": "G", "TEAM": "Indiana Pacers"},
@@ -551,7 +551,7 @@ def sync_live_nba_data():
             cached["fatigue_map"]
         )
 
-    print("🔄 Syncing V6 NBA Engine: ESPN Season Stats, Empirical DvP (G/F/C), GTD/Spot-Starter Safeguards...")
+    print("🔄 Syncing V7 NBA Engine: Active-Rotation Injury Guard, ESPN Season Stats, & Empirical DvP...")
 
     # 1. Layer Official ESPN Season Averages on top of Fallback Dictionary
     espn_season_stats = fetch_espn_season_averages()
@@ -575,6 +575,7 @@ def sync_live_nba_data():
             "L10_PRA": s_data["PRA"],
             "SZN_MIN": s_data["MIN"],
             "L5_MIN": s_data["MIN"],
+            "RECENT_GAMES": 0,
             "POS": s_data["POS"],
             "TEAM": s_data["TEAM"] or prev_team
         }
@@ -584,6 +585,7 @@ def sync_live_nba_data():
         p_data.setdefault("PRA", round(p_data["PTS"] + p_data["REB"] + p_data["AST"], 2))
         p_data.setdefault("SZN_MIN", 24.0)
         p_data.setdefault("L5_MIN", 24.0)
+        p_data.setdefault("RECENT_GAMES", 0)
         for k in ["PTS", "REB", "AST", "3PM", "PRA"]:
             p_data.setdefault(f"SZN_{k}", p_data[k])
             p_data.setdefault(f"L10_{k}", p_data[k])
@@ -761,9 +763,10 @@ def sync_live_nba_data():
             "tag": "/".join(tags) if tags else ""
         }
 
-    # Blend 50% Official Season Avg (SZN) + 50% Last 10 Games (L10) & Track L5 Minute Trends
+    # Blend 50% Official Season Avg (SZN) + 50% Last 10 Games (L10) & Track Recent Games Played
     for norm_p, logs in player_logs.items():
-        if len(logs["PTS"]) >= 2:
+        games_count = len(logs["PTS"])
+        if games_count >= 1:
             full_pts = float(np.mean(logs["PTS"]))
             full_reb = float(np.mean(logs["REB"]))
             full_ast = float(np.mean(logs["AST"]))
@@ -785,7 +788,7 @@ def sync_live_nba_data():
                 szn_3pm = espn_season_stats[norm_p]["3PM"]
                 szn_pra = espn_season_stats[norm_p]["PRA"]
                 szn_min = espn_season_stats[norm_p]["MIN"]
-            elif norm_p in player_db and len(logs["PTS"]) < 6:
+            elif norm_p in player_db and games_count < 6:
                 szn_pts = 0.50 * full_pts + 0.50 * player_db[norm_p]["SZN_PTS"]
                 szn_reb = 0.50 * full_reb + 0.50 * player_db[norm_p]["SZN_REB"]
                 szn_ast = 0.50 * full_ast + 0.50 * player_db[norm_p]["SZN_AST"]
@@ -814,6 +817,7 @@ def sync_live_nba_data():
                 "L10_PRA": round(l10_pra, 1),
                 "SZN_MIN": round(szn_min, 1),
                 "L5_MIN": round(l5_min, 1),
+                "RECENT_GAMES": games_count,
                 "POS": pos_val,
                 "TEAM": logs["TEAM"]
             }
@@ -886,7 +890,7 @@ def sync_live_nba_data():
         "pos_def_mults": pos_def_mults,
         "fatigue_map": fatigue_map
     })
-    print(f"✅ Synced {len(player_db)} players, Empirical G/F/C DvP Rankings, & GTD/Spot-Starter Safeguards!")
+    print(f"✅ Synced {len(player_db)} players, Active-Rotation Injury Guard, & Empirical G/F/C DvP Rankings!")
     return team_db, player_db, opp_ranks, pos_ranks, pos_def_mults, fatigue_map
 
 def fetch_injured_players():
@@ -928,11 +932,14 @@ def fetch_injured_players():
     return prop_excluded, confirmed_out, questionable_gtd
 
 def calc_team_injury_deduction(team_name, player_db, confirmed_out, questionable_gtd):
-    """Deducts projected team points for Out (100% weight) & Questionable/GTD (55% weight) scorers."""
+    """
+    Deducts projected team points for Out (100% weight) & Questionable/GTD (55% weight) scorers.
+    Requires RECENT_GAMES >= 2 so long-term injured / ghost fallback players are never double-counted.
+    """
     penalty = 0.0
     gtd_star_count = 0
     for norm_p, p_data in player_db.items():
-        if p_data.get("TEAM") != team_name:
+        if p_data.get("TEAM") != team_name or p_data.get("RECENT_GAMES", 0) < 2:
             continue
         pts = p_data.get("SZN_PTS", p_data.get("PTS", 0.0))
         if pts < 11.5:
@@ -958,14 +965,17 @@ def calc_team_fatigue_penalty(team_name, is_home, fatigue_map):
     return min(pen, 4.2)
 
 def calc_teammate_usage_boost(norm_p, team_name, stat_code, player_db, confirmed_out, questionable_gtd):
-    """Calculates 'Next Man Up' usage multiplier (counts Out at 100% and GTD at 50%)."""
+    """
+    Calculates 'Next Man Up' usage multiplier (counts Out at 100% and GTD at 50%).
+    Requires RECENT_GAMES >= 2 so long-term absences already baked into L10/Szn averages don't trigger phantom boosts.
+    """
     if not team_name:
         return 1.0, 0.0
     missing_pts = 0.0
     missing_ast = 0.0
     missing_reb = 0.0
     for other_p, p_data in player_db.items():
-        if other_p == norm_p or p_data.get("TEAM") != team_name:
+        if other_p == norm_p or p_data.get("TEAM") != team_name or p_data.get("RECENT_GAMES", 0) < 2:
             continue
         weight = 1.0 if other_p in confirmed_out else (0.50 if other_p in questionable_gtd else 0.0)
         if weight <= 0.0:
@@ -999,18 +1009,14 @@ def is_spot_starter_under_trap(pick_dir, stat_code, line, szn_avg, l10_avg, szn_
     if pick_dir != "Under":
         return False
     anchor = max(szn_avg, l10_avg, 0.5)
-    # 1. If player averages < 16 MPG, never bet their Under (books only post lines for them on spot-starts)
     if szn_min < MIN_PLAYER_AVG_MINUTES:
         return True
-    # 2. If sportsbook line is 30%+ higher than player's highest baseline, book is pricing a role spike
     if line >= (anchor * 1.30):
         return True
-    # 3. Absolute point-jump guard for PTS, REB, AST
     if stat_code == "PTS" and (line - anchor) >= 3.8:
         return True
     if stat_code in ["REB", "AST"] and (line - anchor) >= 1.8:
         return True
-    # 4. If team has heavy Out/GTD impact (25+ combined missing stats) and player is a bench/role player (< 26 MPG), skip Under
     if missing_team_impact >= 25.0 and szn_min < 26.5:
         return True
     return False
@@ -1058,7 +1064,7 @@ def scan_all_fanduel_markets():
     }
 
     res = requests.get(url, params=params, timeout=10)
-    print(f"📊 V6 Multi-Book FanDuel Sync for {today_ct_str}! (Credits Remaining: {res.headers.get('x-requests-remaining')})")
+    print(f"📊 V7 Multi-Book FanDuel Sync for {today_ct_str}! (Credits Remaining: {res.headers.get('x-requests-remaining')})")
     if res.status_code != 200:
         return
 
@@ -1098,7 +1104,7 @@ def scan_all_fanduel_markets():
         raw_h_pts = ((h_stats["off"] + a_stats["def"]) / 2.0) * pace_scaler
         raw_a_pts = ((a_stats["off"] + h_stats["def"]) / 2.0) * pace_scaler
 
-        # 2. Star Injury (Out + 55% GTD Weight) & Schedule Fatigue
+        # 2. Active-Rotation Star Injury (Out + 55% GTD Weight) & Schedule Fatigue
         h_inj_pen, h_gtd_stars = calc_team_injury_deduction(home, player_db, confirmed_out, questionable_gtd)
         a_inj_pen, a_gtd_stars = calc_team_injury_deduction(away, player_db, confirmed_out, questionable_gtd)
 
@@ -1168,7 +1174,6 @@ def scan_all_fanduel_markets():
                             opp_team = away if sp_diff >= 0 else home
                             pick_gtd_stars = h_gtd_stars if pick_team == home else a_gtd_stars
 
-                            # Freeze backing a team on the spread if 2+ key scorers are GTD
                             if pick_gtd_stars >= 2:
                                 continue
 
@@ -1383,7 +1388,6 @@ def scan_all_fanduel_markets():
                             p_pos = p_info.get("POS", "G")
                             p_team = p_info.get("TEAM", "")
 
-                            # Skip players whose team wasn't matched to either team in the game
                             if p_team not in [home, away]:
                                 continue
 
@@ -1410,7 +1414,7 @@ def scan_all_fanduel_markets():
                             matchup_mult = (0.50 * team_def_mult) + (0.50 * emp_pos_mult)
                             blended_def_rk = int(round(0.50 * opp_def_rk + 0.50 * emp_pos_rk))
 
-                            # --- 2. MINUTE-TREND SCALING & NEXT-MAN-UP USAGE BOOST ---
+                            # --- 2. MINUTE-TREND SCALING & ACTIVE-ROTATION USAGE BOOST ---
                             min_trend_mult = float(np.clip(l5_min / max(12.0, szn_min), 0.90, 1.12))
                             usage_boost_mult, missing_team_impact = calc_teammate_usage_boost(norm_p, p_team, stat_code, player_db, confirmed_out, questionable_gtd)
 
@@ -1658,7 +1662,7 @@ def check_scores_and_grade_all_markets():
     post_daily_recaps_if_complete(tracked_bets)
 
 if __name__ == "__main__":
-    print("🤖 LIVE NBA EV BOT (V6 SPOT-STARTER & GTD SAFEGUARD ENGINE) IS LIVE!")
+    print("🤖 LIVE NBA EV BOT (V7 ACTIVE-ROTATION & SPOT-STARTER SAFEGUARD ENGINE) IS LIVE!")
     last_scan = 0
     while True:
         now_ts = time.time()

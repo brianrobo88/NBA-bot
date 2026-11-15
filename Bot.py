@@ -40,7 +40,7 @@ TRACKER_FILE = "tracked_all_markets.json"
 SCANNED_EVENTS_FILE = "scanned_prop_events.json"
 LIVE_STATS_CACHE_FILE = "live_nba_stats_cache.json"
 RECAP_POSTED_FILE = "daily_recaps_posted.json"
-CACHE_SCHEMA_VERSION = "v7_active_rotation_guard"
+CACHE_SCHEMA_VERSION = "v8_missing_mins_team_resolver"
 
 SCORE_CHECK_SECONDS = 300     # Checks ESPN scores every 5 mins (FREE)
 FANDUEL_SCAN_SECONDS = 7200   # Scans FanDuel every 2 hours
@@ -100,9 +100,24 @@ def normalize_name(name):
     return clean
 
 def normalize_team_name(name):
-    if name == "LA Clippers":
+    if not name:
+        return ""
+    raw = str(name).strip()
+    if raw == "LA Clippers":
         return "Los Angeles Clippers"
-    return name
+    if raw in TEAM_ABBR and raw != "LA Clippers":
+        return raw
+    # Resolve short mascot names ("Pelicans", "Cavaliers") or abbreviations ("NOP", "GS")
+    raw_lower = raw.lower()
+    abbr_Overrides = {"gs": "Golden State Warriors", "no": "New Orleans Pelicans", "ny": "New York Knicks", "sa": "San Antonio Spurs", "utah": "Utah Jazz", "wsh": "Washington Wizards"}
+    if raw_lower in abbr_Overrides:
+        return abbr_Overrides[raw_lower]
+    for full_name, abbr in TEAM_ABBR.items():
+        if full_name == "LA Clippers":
+            continue
+        if raw.upper() == abbr or raw_lower == full_name.lower() or full_name.lower().endswith(" " + raw_lower):
+            return full_name
+    return raw
 
 def load_json(filename, default_val):
     if os.path.exists(filename):
@@ -392,6 +407,10 @@ def get_fallback_player_baselines():
         "Thomas Bryant": {"PTS": 8.7, "REB": 2.0, "AST": 0.8, "POS": "C", "TEAM": "Cleveland Cavaliers"},
         "Mario Hezonja": {"PTS": 7.5, "REB": 5.3, "AST": 1.5, "POS": "F", "TEAM": "Cleveland Cavaliers"},
         "Craig Porter Jr": {"PTS": 1.4, "REB": 1.7, "AST": 1.4, "POS": "G", "TEAM": "Cleveland Cavaliers"},
+        "Isaac Okoro": {"PTS": 6.8, "REB": 1.6, "AST": 1.4, "POS": "F", "TEAM": "Chicago Bulls"},
+        "Caleb Wilson": {"PTS": 11.4, "REB": 6.2, "AST": 2.1, "POS": "F", "TEAM": "Chicago Bulls"},
+        "Ryan Conwell": {"PTS": 5.8, "REB": 1.6, "AST": 1.3, "POS": "G", "TEAM": "Miami Heat"},
+        "Pelle Larsson": {"PTS": 9.8, "REB": 3.6, "AST": 2.4, "POS": "G", "TEAM": "Miami Heat"},
         "Tyrese Maxey": {"PTS": 27.6, "REB": 3.8, "AST": 6.4, "POS": "G", "TEAM": "Philadelphia 76ers"},
         "Joel Embiid": {"PTS": 26.8, "REB": 10.4, "AST": 4.8, "POS": "C", "TEAM": "Philadelphia 76ers"},
         "Paul George": {"PTS": 18.6, "REB": 5.6, "AST": 4.4, "POS": "F", "TEAM": "Philadelphia 76ers"},
@@ -485,7 +504,12 @@ def fetch_espn_season_averages():
                 if not p_disp:
                     continue
                 norm_p = normalize_name(p_disp)
-                t_raw = ath.get("teamName") or ath.get("team", {}).get("displayName", "")
+                t_raw = (
+                    ath.get("team", {}).get("displayName")
+                    or ath.get("teamName")
+                    or ath.get("teamShortName")
+                    or ""
+                )
                 t_name = normalize_team_name(t_raw) if t_raw else ""
                 pos_abbr = ath.get("position", {}).get("abbreviation", "G")
                 p_pos = "C" if "C" in pos_abbr else ("F" if "F" in pos_abbr else "G")
@@ -551,12 +575,13 @@ def sync_live_nba_data():
             cached["fatigue_map"]
         )
 
-    print("🔄 Syncing V7 NBA Engine: Active-Rotation Injury Guard, ESPN Season Stats, & Empirical DvP...")
+    print("🔄 Syncing V8 NBA Engine: Missing-Minutes Guard, Full Team Resolver, & Empirical DvP...")
 
     # 1. Layer Official ESPN Season Averages on top of Fallback Dictionary
     espn_season_stats = fetch_espn_season_averages()
     for norm_p, s_data in espn_season_stats.items():
         prev_team = player_db.get(norm_p, {}).get("TEAM", "")
+        resolved_team = s_data["TEAM"] if s_data["TEAM"] in TEAM_ABBR else prev_team
         player_db[norm_p] = {
             "PTS": s_data["PTS"],
             "REB": s_data["REB"],
@@ -577,7 +602,7 @@ def sync_live_nba_data():
             "L5_MIN": s_data["MIN"],
             "RECENT_GAMES": 0,
             "POS": s_data["POS"],
-            "TEAM": s_data["TEAM"] or prev_team
+            "TEAM": resolved_team
         }
 
     for norm_p, p_data in player_db.items():
@@ -890,7 +915,7 @@ def sync_live_nba_data():
         "pos_def_mults": pos_def_mults,
         "fatigue_map": fatigue_map
     })
-    print(f"✅ Synced {len(player_db)} players, Active-Rotation Injury Guard, & Empirical G/F/C DvP Rankings!")
+    print(f"✅ Synced {len(player_db)} players, Missing-Minutes Guard, & Empirical G/F/C DvP Rankings!")
     return team_db, player_db, opp_ranks, pos_ranks, pos_def_mults, fatigue_map
 
 def fetch_injured_players():
@@ -942,7 +967,7 @@ def calc_team_injury_deduction(team_name, player_db, confirmed_out, questionable
         if p_data.get("TEAM") != team_name or p_data.get("RECENT_GAMES", 0) < 2:
             continue
         pts = p_data.get("SZN_PTS", p_data.get("PTS", 0.0))
-        if pts < 11.5:
+        if pts < 11.0:
             continue
         if norm_p in confirmed_out:
             penalty += (pts - 8.0) * 0.20
@@ -964,60 +989,79 @@ def calc_team_fatigue_penalty(team_name, is_home, fatigue_map):
         pen += 0.8
     return min(pen, 4.2)
 
-def calc_teammate_usage_boost(norm_p, team_name, stat_code, player_db, confirmed_out, questionable_gtd):
+def calc_teammate_usage_boost(norm_p, team_name, player_pos, stat_code, player_db, confirmed_out, questionable_gtd):
     """
-    Calculates 'Next Man Up' usage multiplier (counts Out at 100% and GTD at 50%).
-    Requires RECENT_GAMES >= 2 so long-term absences already baked into L10/Szn averages don't trigger phantom boosts.
+    Calculates 'Next Man Up' usage multiplier and tracks missing team rotation minutes.
+    Captures glue-guy / wing absences (e.g., Caleb Wilson / Pelle Larsson) via missing minutes.
     """
     if not team_name:
-        return 1.0, 0.0
+        return 1.0, 0.0, 0.0
     missing_pts = 0.0
     missing_ast = 0.0
     missing_reb = 0.0
+    missing_team_mins = 0.0
+    missing_pos_mins = 0.0
+
     for other_p, p_data in player_db.items():
         if other_p == norm_p or p_data.get("TEAM") != team_name or p_data.get("RECENT_GAMES", 0) < 2:
             continue
-        weight = 1.0 if other_p in confirmed_out else (0.50 if other_p in questionable_gtd else 0.0)
+        weight = 1.0 if other_p in confirmed_out else (0.55 if other_p in questionable_gtd else 0.0)
         if weight <= 0.0:
             continue
         pts = p_data.get("SZN_PTS", p_data.get("PTS", 0.0))
         ast = p_data.get("SZN_AST", p_data.get("AST", 0.0))
         reb = p_data.get("SZN_REB", p_data.get("REB", 0.0))
-        if pts >= 15.0:
+        mins = p_data.get("SZN_MIN", 20.0)
+        other_pos = p_data.get("POS", "G")
+
+        if mins >= 16.0:
+            missing_team_mins += mins * weight
+            if other_pos == player_pos:
+                missing_pos_mins += mins * weight
+        if pts >= 14.0:
             missing_pts += pts * weight
-        if ast >= 5.0:
+        if ast >= 4.8:
             missing_ast += ast * weight
-        if reb >= 7.0:
+        if reb >= 6.0:
             missing_reb += reb * weight
 
     total_missing_impact = missing_pts + missing_ast + missing_reb
-    if stat_code in ["PTS", "3PM"] and missing_pts > 0:
-        return min(1.14, 1.0 + (missing_pts * 0.0028)), total_missing_impact
-    elif stat_code == "AST" and missing_ast > 0:
-        return min(1.15, 1.0 + (missing_ast * 0.0085)), total_missing_impact
-    elif stat_code == "REB" and missing_reb > 0:
-        return min(1.14, 1.0 + (missing_reb * 0.0065)), total_missing_impact
-    elif stat_code == "PRA" and total_missing_impact > 0:
-        return min(1.14, 1.0 + (total_missing_impact * 0.0022)), total_missing_impact
-    return 1.0, total_missing_impact
+    pos_min_boost = min(0.06, missing_pos_mins * 0.0018)
 
-def is_spot_starter_under_trap(pick_dir, stat_code, line, szn_avg, l10_avg, szn_min, missing_team_impact):
+    if stat_code in ["PTS", "3PM"]:
+        mult = 1.0 + (missing_pts * 0.0028) + pos_min_boost
+    elif stat_code == "AST":
+        mult = 1.0 + (missing_ast * 0.0085) + pos_min_boost
+    elif stat_code == "REB":
+        mult = 1.0 + (missing_reb * 0.0065) + pos_min_boost
+    else:
+        mult = 1.0 + (total_missing_impact * 0.0022) + pos_min_boost
+
+    return min(1.15, mult), total_missing_impact, missing_team_mins
+
+def is_spot_starter_under_trap(pick_dir, stat_code, line, szn_avg, l10_avg, szn_min, usage_boost_mult, missing_team_impact, missing_team_mins):
     """
-    Blocks Under bets on role players whose lines were inflated by sportsbooks
-    due to starters being Out or GTD (e.g., Jaylon Tyson 16.5 PTS vs 8.3 Szn Avg).
+    Blocks Under bets on role players when:
+    - Sportsbooks inflate their line for a spot-start
+    - Their team is missing rotation minutes (e.g., Caleb Wilson out -> Isaac Okoro plays extra minutes)
+    - The model itself calculated a positive usage/minutes boost for the player
     """
     if pick_dir != "Under":
         return False
     anchor = max(szn_avg, l10_avg, 0.5)
+    # 1. Never bet Under on low-minute players (< 16 MPG)
     if szn_min < MIN_PLAYER_AVG_MINUTES:
         return True
-    if line >= (anchor * 1.30):
+    # 2. Never bet Under on a role/starter player (< 29 MPG) if teammates are Out/GTD (missing >= 18 rotation mins or usage_boost >= 1.03)
+    if szn_min < 29.0 and (missing_team_mins >= 18.0 or usage_boost_mult >= 1.03 or missing_team_impact >= 20.0):
         return True
-    if stat_code == "PTS" and (line - anchor) >= 3.8:
+    # 3. If sportsbook line is 28%+ higher than player's highest baseline, book is pricing a role spike
+    if line >= (anchor * 1.28):
         return True
-    if stat_code in ["REB", "AST"] and (line - anchor) >= 1.8:
+    # 4. Absolute point-jump guard for PTS, REB, AST
+    if stat_code == "PTS" and (line - anchor) >= 3.5:
         return True
-    if missing_team_impact >= 25.0 and szn_min < 26.5:
+    if stat_code in ["REB", "AST"] and (line - anchor) >= 1.6:
         return True
     return False
 
@@ -1064,7 +1108,7 @@ def scan_all_fanduel_markets():
     }
 
     res = requests.get(url, params=params, timeout=10)
-    print(f"📊 V7 Multi-Book FanDuel Sync for {today_ct_str}! (Credits Remaining: {res.headers.get('x-requests-remaining')})")
+    print(f"📊 V8 Multi-Book FanDuel Sync for {today_ct_str}! (Credits Remaining: {res.headers.get('x-requests-remaining')})")
     if res.status_code != 200:
         return
 
@@ -1386,7 +1430,7 @@ def scan_all_fanduel_markets():
                             szn_min = p_info.get("SZN_MIN", 24.0)
                             l5_min = p_info.get("L5_MIN", szn_min)
                             p_pos = p_info.get("POS", "G")
-                            p_team = p_info.get("TEAM", "")
+                            p_team = normalize_team_name(p_info.get("TEAM", ""))
 
                             if p_team not in [home, away]:
                                 continue
@@ -1414,9 +1458,9 @@ def scan_all_fanduel_markets():
                             matchup_mult = (0.50 * team_def_mult) + (0.50 * emp_pos_mult)
                             blended_def_rk = int(round(0.50 * opp_def_rk + 0.50 * emp_pos_rk))
 
-                            # --- 2. MINUTE-TREND SCALING & ACTIVE-ROTATION USAGE BOOST ---
+                            # --- 2. MINUTE-TREND SCALING & ACTIVE-ROTATION USAGE/MINUTES BOOST ---
                             min_trend_mult = float(np.clip(l5_min / max(12.0, szn_min), 0.90, 1.12))
-                            usage_boost_mult, missing_team_impact = calc_teammate_usage_boost(norm_p, p_team, stat_code, player_db, confirmed_out, questionable_gtd)
+                            usage_boost_mult, missing_team_impact, missing_team_mins = calc_teammate_usage_boost(norm_p, p_team, p_pos, stat_code, player_db, confirmed_out, questionable_gtd)
 
                             pace_mult = exp_pace / avg_pace
                             lambda_proj = base_avg * (0.75 * matchup_mult + 0.25 * pace_mult) * (0.50 + 0.50 * min_trend_mult) * usage_boost_mult
@@ -1438,8 +1482,8 @@ def scan_all_fanduel_markets():
                             else:
                                 pick_dir, stat_win_prob, juice = "Under", prob_under, int(sides["Under"]["price"])
 
-                            # --- 4. SPOT-STARTER / INFLATED BENCH LINE UNDER SAFEGUARD ---
-                            if is_spot_starter_under_trap(pick_dir, stat_code, line, szn_avg, l10_avg, szn_min, missing_team_impact):
+                            # --- 4. SPOT-STARTER / MISSING-TEAMMATE-MINUTES UNDER SAFEGUARD ---
+                            if is_spot_starter_under_trap(pick_dir, stat_code, line, szn_avg, l10_avg, szn_min, usage_boost_mult, missing_team_impact, missing_team_mins):
                                 continue
 
                             # --- 5. DE-VIGGED MULTI-BOOK CONSENSUS & JUICE CHECK ---
@@ -1662,7 +1706,7 @@ def check_scores_and_grade_all_markets():
     post_daily_recaps_if_complete(tracked_bets)
 
 if __name__ == "__main__":
-    print("🤖 LIVE NBA EV BOT (V7 ACTIVE-ROTATION & SPOT-STARTER SAFEGUARD ENGINE) IS LIVE!")
+    print("🤖 LIVE NBA EV BOT (V8 MISSING-MINUTES & TEAM-RESOLVER ENGINE) IS LIVE!")
     last_scan = 0
     while True:
         now_ts = time.time()

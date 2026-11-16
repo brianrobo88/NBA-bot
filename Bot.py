@@ -28,7 +28,7 @@ MIN_EDGE_PLAYER_PROPS = 0.150 # 15.0% Minimum EV for Player Props
 BOOKMAKERS_LIST = "fanduel,draftkings,betmgm,caesars"
 
 MAX_DEEP_SCAN_GAMES_PER_RUN = 8
-LOOKBACK_DAYS_FOR_STATS = 25  # Covers full season-to-date + rolling L10/L5 game logs
+LOOKBACK_DAYS_FOR_STATS = 25  # Covers full season-to-date + rolling L10/L5/L3 game logs
 
 # Minimum Prop Line & Minutes Filters (Avoids micro-line & deep-bench traps)
 MIN_PROP_LINE_PTS = 7.5
@@ -40,7 +40,7 @@ TRACKER_FILE = "tracked_all_markets.json"
 SCANNED_EVENTS_FILE = "scanned_prop_events.json"
 LIVE_STATS_CACHE_FILE = "live_nba_stats_cache.json"
 RECAP_POSTED_FILE = "daily_recaps_posted.json"
-CACHE_SCHEMA_VERSION = "v8_missing_mins_team_resolver"
+CACHE_SCHEMA_VERSION = "v9_true_net_rating_spreads"
 
 SCORE_CHECK_SECONDS = 300     # Checks ESPN scores every 5 mins (FREE)
 FANDUEL_SCAN_SECONDS = 7200   # Scans FanDuel every 2 hours
@@ -52,7 +52,7 @@ NBA_STD_DEV_H1_SPREAD = 8.8
 NBA_STD_DEV_Q1_TOTAL = 8.2
 NBA_STD_DEV_Q1_SPREAD = 6.2
 DEFAULT_HCA = 2.2
-SPREAD_SHRINKAGE = 0.65       # Regresses raw efficiency gaps toward mean
+SPREAD_SHRINKAGE = 0.78       # Applied to true Net Rating differential (no double-halving)
 PERIOD_TOTAL_SHRINKAGE = 0.75 # Regresses 1Q/1H totals toward league average
 
 # Venue-Specific Home Court Advantage (Altitude & Elite Home Tiers)
@@ -107,11 +107,17 @@ def normalize_team_name(name):
         return "Los Angeles Clippers"
     if raw in TEAM_ABBR and raw != "LA Clippers":
         return raw
-    # Resolve short mascot names ("Pelicans", "Cavaliers") or abbreviations ("NOP", "GS")
     raw_lower = raw.lower()
-    abbr_Overrides = {"gs": "Golden State Warriors", "no": "New Orleans Pelicans", "ny": "New York Knicks", "sa": "San Antonio Spurs", "utah": "Utah Jazz", "wsh": "Washington Wizards"}
-    if raw_lower in abbr_Overrides:
-        return abbr_Overrides[raw_lower]
+    abbr_overrides = {
+        "gs": "Golden State Warriors",
+        "no": "New Orleans Pelicans",
+        "ny": "New York Knicks",
+        "sa": "San Antonio Spurs",
+        "utah": "Utah Jazz",
+        "wsh": "Washington Wizards"
+    }
+    if raw_lower in abbr_overrides:
+        return abbr_overrides[raw_lower]
     for full_name, abbr in TEAM_ABBR.items():
         if full_name == "LA Clippers":
             continue
@@ -244,7 +250,7 @@ def get_team_efficiency_baselines():
         "Houston Rockets": {"off": 119.2, "def": 109.7, "pace": 99.5, "opp_reb": 41.5, "opp_ast": 24.2, "q1_off": 29.8, "q1_def": 27.1, "h1_off": 59.8, "h1_def": 54.8},
         "Golden State Warriors": {"off": 121.3, "def": 111.7, "pace": 101.2, "opp_reb": 44.2, "opp_ast": 26.1, "q1_off": 31.4, "q1_def": 28.2, "h1_off": 62.1, "h1_def": 56.0},
         "Minnesota Timberwolves": {"off": 117.2, "def": 106.0, "pace": 98.4, "opp_reb": 41.2, "opp_ast": 23.9, "q1_off": 29.1, "q1_def": 26.4, "h1_off": 58.4, "h1_def": 53.0},
-        "Oklahoma City Thunder": {"off": 113.4, "def": 105.6, "pace": 100.5, "opp_reb": 45.8, "opp_ast": 24.0, "q1_off": 28.8, "q1_def": 26.2, "h1_off": 57.6, "h1_def": 52.8},
+        "Oklahoma City Thunder": {"off": 116.8, "def": 105.6, "pace": 100.5, "opp_reb": 45.8, "opp_ast": 24.0, "q1_off": 29.8, "q1_def": 26.2, "h1_off": 59.2, "h1_def": 52.8},
         "Los Angeles Lakers": {"off": 122.3, "def": 114.7, "pace": 101.4, "opp_reb": 44.6, "opp_ast": 27.4, "q1_off": 31.0, "q1_def": 28.9, "h1_off": 61.8, "h1_def": 57.5},
         "Portland Trail Blazers": {"off": 119.6, "def": 113.8, "pace": 99.8, "opp_reb": 44.9, "opp_ast": 26.8, "q1_off": 29.5, "q1_def": 28.4, "h1_off": 59.2, "h1_def": 56.8},
         "Memphis Grizzlies": {"off": 117.3, "def": 110.2, "pace": 100.9, "opp_reb": 43.2, "opp_ast": 25.4, "q1_off": 29.6, "q1_def": 27.8, "h1_off": 59.0, "h1_def": 55.2},
@@ -411,6 +417,7 @@ def get_fallback_player_baselines():
         "Caleb Wilson": {"PTS": 11.4, "REB": 6.2, "AST": 2.1, "POS": "F", "TEAM": "Chicago Bulls"},
         "Ryan Conwell": {"PTS": 5.8, "REB": 1.6, "AST": 1.3, "POS": "G", "TEAM": "Miami Heat"},
         "Pelle Larsson": {"PTS": 9.8, "REB": 3.6, "AST": 2.4, "POS": "G", "TEAM": "Miami Heat"},
+        "Andre Drummond": {"PTS": 6.8, "REB": 7.9, "AST": 0.8, "POS": "C", "TEAM": "New York Knicks"},
         "Tyrese Maxey": {"PTS": 27.6, "REB": 3.8, "AST": 6.4, "POS": "G", "TEAM": "Philadelphia 76ers"},
         "Joel Embiid": {"PTS": 26.8, "REB": 10.4, "AST": 4.8, "POS": "C", "TEAM": "Philadelphia 76ers"},
         "Paul George": {"PTS": 18.6, "REB": 5.6, "AST": 4.4, "POS": "F", "TEAM": "Philadelphia 76ers"},
@@ -575,7 +582,7 @@ def sync_live_nba_data():
             cached["fatigue_map"]
         )
 
-    print("🔄 Syncing V8 NBA Engine: Missing-Minutes Guard, Full Team Resolver, & Empirical DvP...")
+    print("🔄 Syncing V9 NBA Engine: True Net Rating Spreads, L3/L5 Minute Compression Guard, & Empirical DvP...")
 
     # 1. Layer Official ESPN Season Averages on top of Fallback Dictionary
     espn_season_stats = fetch_espn_season_averages()
@@ -600,6 +607,7 @@ def sync_live_nba_data():
             "L10_PRA": s_data["PRA"],
             "SZN_MIN": s_data["MIN"],
             "L5_MIN": s_data["MIN"],
+            "L3_MIN": s_data["MIN"],
             "RECENT_GAMES": 0,
             "POS": s_data["POS"],
             "TEAM": resolved_team
@@ -610,6 +618,7 @@ def sync_live_nba_data():
         p_data.setdefault("PRA", round(p_data["PTS"] + p_data["REB"] + p_data["AST"], 2))
         p_data.setdefault("SZN_MIN", 24.0)
         p_data.setdefault("L5_MIN", 24.0)
+        p_data.setdefault("L3_MIN", 24.0)
         p_data.setdefault("RECENT_GAMES", 0)
         for k in ["PTS", "REB", "AST", "3PM", "PRA"]:
             p_data.setdefault(f"SZN_{k}", p_data[k])
@@ -788,7 +797,7 @@ def sync_live_nba_data():
             "tag": "/".join(tags) if tags else ""
         }
 
-    # Blend 50% Official Season Avg (SZN) + 50% Last 10 Games (L10) & Track Recent Games Played
+    # Blend 50% Official Season Avg (SZN) + 50% Last 10 Games (L10) & Track L5/L3 Minutes
     for norm_p, logs in player_logs.items():
         games_count = len(logs["PTS"])
         if games_count >= 1:
@@ -805,6 +814,7 @@ def sync_live_nba_data():
             l10_3pm = float(np.mean(logs["3PM"][-10:]))
             l10_pra = float(np.mean(logs["PRA"][-10:]))
             l5_min = float(np.mean(logs["MIN"][-5:]))
+            l3_min = float(np.mean(logs["MIN"][-3:]))
 
             if norm_p in espn_season_stats:
                 szn_pts = espn_season_stats[norm_p]["PTS"]
@@ -842,6 +852,7 @@ def sync_live_nba_data():
                 "L10_PRA": round(l10_pra, 1),
                 "SZN_MIN": round(szn_min, 1),
                 "L5_MIN": round(l5_min, 1),
+                "L3_MIN": round(l3_min, 1),
                 "RECENT_GAMES": games_count,
                 "POS": pos_val,
                 "TEAM": logs["TEAM"]
@@ -853,15 +864,15 @@ def sync_live_nba_data():
         if len(logs["AST"]) >= 2:
             team_db[t_name]["opp_ast"] = round(0.65 * float(np.mean(logs["AST"])) + 0.35 * team_db[t_name]["opp_ast"], 1)
         if len(logs["PTS"]) >= 2:
-            team_db[t_name]["def"] = round(0.65 * float(np.mean(logs["PTS"])) + 0.35 * team_db[t_name]["def"], 1)
+            team_db[t_name]["def"] = round(0.80 * float(np.mean(logs["PTS"])) + 0.20 * team_db[t_name]["def"], 1)
 
     for t_name, p_logs in period_logs.items():
         if len(p_logs["q1_off"]) >= 2:
-            team_db[t_name]["q1_off"] = round(0.60 * float(np.mean(p_logs["q1_off"])) + 0.40 * team_db[t_name]["q1_off"], 1)
-            team_db[t_name]["q1_def"] = round(0.60 * float(np.mean(p_logs["q1_def"])) + 0.40 * team_db[t_name]["q1_def"], 1)
+            team_db[t_name]["q1_off"] = round(0.65 * float(np.mean(p_logs["q1_off"])) + 0.35 * team_db[t_name]["q1_off"], 1)
+            team_db[t_name]["q1_def"] = round(0.65 * float(np.mean(p_logs["q1_def"])) + 0.35 * team_db[t_name]["q1_def"], 1)
         if len(p_logs["h1_off"]) >= 2:
-            team_db[t_name]["h1_off"] = round(0.60 * float(np.mean(p_logs["h1_off"])) + 0.40 * team_db[t_name]["h1_off"], 1)
-            team_db[t_name]["h1_def"] = round(0.60 * float(np.mean(p_logs["h1_def"])) + 0.40 * team_db[t_name]["h1_def"], 1)
+            team_db[t_name]["h1_off"] = round(0.65 * float(np.mean(p_logs["h1_off"])) + 0.35 * team_db[t_name]["h1_off"], 1)
+            team_db[t_name]["h1_def"] = round(0.65 * float(np.mean(p_logs["h1_def"])) + 0.35 * team_db[t_name]["h1_def"], 1)
 
     pts_sorted = sorted(team_db.keys(), key=lambda x: team_db[x]["def"])
     reb_sorted = sorted(team_db.keys(), key=lambda x: team_db[x]["opp_reb"])
@@ -915,7 +926,7 @@ def sync_live_nba_data():
         "pos_def_mults": pos_def_mults,
         "fatigue_map": fatigue_map
     })
-    print(f"✅ Synced {len(player_db)} players, Missing-Minutes Guard, & Empirical G/F/C DvP Rankings!")
+    print(f"✅ Synced {len(player_db)} players, True Net Rating Spreads, & L3/L5 Minute Guards!")
     return team_db, player_db, opp_ranks, pos_ranks, pos_def_mults, fatigue_map
 
 def fetch_injured_players():
@@ -990,10 +1001,7 @@ def calc_team_fatigue_penalty(team_name, is_home, fatigue_map):
     return min(pen, 4.2)
 
 def calc_teammate_usage_boost(norm_p, team_name, player_pos, stat_code, player_db, confirmed_out, questionable_gtd):
-    """
-    Calculates 'Next Man Up' usage multiplier and tracks missing team rotation minutes.
-    Captures glue-guy / wing absences (e.g., Caleb Wilson / Pelle Larsson) via missing minutes.
-    """
+    """Calculates 'Next Man Up' usage multiplier and tracks missing team rotation minutes."""
     if not team_name:
         return 1.0, 0.0, 0.0
     missing_pts = 0.0
@@ -1040,25 +1048,16 @@ def calc_teammate_usage_boost(norm_p, team_name, player_pos, stat_code, player_d
     return min(1.15, mult), total_missing_impact, missing_team_mins
 
 def is_spot_starter_under_trap(pick_dir, stat_code, line, szn_avg, l10_avg, szn_min, usage_boost_mult, missing_team_impact, missing_team_mins):
-    """
-    Blocks Under bets on role players when:
-    - Sportsbooks inflate their line for a spot-start
-    - Their team is missing rotation minutes (e.g., Caleb Wilson out -> Isaac Okoro plays extra minutes)
-    - The model itself calculated a positive usage/minutes boost for the player
-    """
+    """Blocks Under bets on role players whose lines or minutes are inflated by teammate absences."""
     if pick_dir != "Under":
         return False
     anchor = max(szn_avg, l10_avg, 0.5)
-    # 1. Never bet Under on low-minute players (< 16 MPG)
     if szn_min < MIN_PLAYER_AVG_MINUTES:
         return True
-    # 2. Never bet Under on a role/starter player (< 29 MPG) if teammates are Out/GTD (missing >= 18 rotation mins or usage_boost >= 1.03)
     if szn_min < 29.0 and (missing_team_mins >= 18.0 or usage_boost_mult >= 1.03 or missing_team_impact >= 20.0):
         return True
-    # 3. If sportsbook line is 28%+ higher than player's highest baseline, book is pricing a role spike
     if line >= (anchor * 1.28):
         return True
-    # 4. Absolute point-jump guard for PTS, REB, AST
     if stat_code == "PTS" and (line - anchor) >= 3.5:
         return True
     if stat_code in ["REB", "AST"] and (line - anchor) >= 1.6:
@@ -1108,7 +1107,7 @@ def scan_all_fanduel_markets():
     }
 
     res = requests.get(url, params=params, timeout=10)
-    print(f"📊 V8 Multi-Book FanDuel Sync for {today_ct_str}! (Credits Remaining: {res.headers.get('x-requests-remaining')})")
+    print(f"📊 V9 Multi-Book FanDuel Sync for {today_ct_str}! (Credits Remaining: {res.headers.get('x-requests-remaining')})")
     if res.status_code != 200:
         return
 
@@ -1140,7 +1139,7 @@ def scan_all_fanduel_markets():
         h_ranks = opp_ranks.get(home, {"PTS": 15, "REB": 15, "AST": 15, "3PM": 15, "PRA": 15})
         a_ranks = opp_ranks.get(away, {"PTS": 15, "REB": 15, "AST": 15, "3PM": 15, "PRA": 15})
 
-        # 1. Pace Normalization (No Double-Counting)
+        # 1. Pace Normalization
         exp_pace = (h_stats["pace"] * a_stats["pace"]) / avg_pace
         team_avg_pace = (h_stats["pace"] + a_stats["pace"]) / 2.0
         pace_scaler = exp_pace / team_avg_pace
@@ -1148,7 +1147,7 @@ def scan_all_fanduel_markets():
         raw_h_pts = ((h_stats["off"] + a_stats["def"]) / 2.0) * pace_scaler
         raw_a_pts = ((a_stats["off"] + h_stats["def"]) / 2.0) * pace_scaler
 
-        # 2. Active-Rotation Star Injury (Out + 55% GTD Weight) & Schedule Fatigue
+        # 2. Active-Rotation Star Injury & Schedule Fatigue
         h_inj_pen, h_gtd_stars = calc_team_injury_deduction(home, player_db, confirmed_out, questionable_gtd)
         a_inj_pen, a_gtd_stars = calc_team_injury_deduction(away, player_db, confirmed_out, questionable_gtd)
 
@@ -1156,15 +1155,16 @@ def scan_all_fanduel_markets():
         a_fat_pen = calc_team_fatigue_penalty(away, False, fatigue_map)
         hca_val = get_team_hca(home)
 
-        # 3. 0.65 Bayesian Shrinkage for Sharp Margin & Total
-        shrunk_eff_diff = (raw_h_pts - raw_a_pts) * SPREAD_SHRINKAGE
-        model_margin = shrunk_eff_diff + hca_val - (h_inj_pen - a_inj_pen) - (h_fat_pen - a_fat_pen)
+        # 3. TRUE NET RATING DIFFERENTIAL (Fixes the 0.50x double-halving bug on spreads)
+        true_net_rtg_diff = ((h_stats["off"] - h_stats["def"]) - (a_stats["off"] - a_stats["def"])) * pace_scaler
+        shrunk_eff_diff = true_net_rtg_diff * SPREAD_SHRINKAGE
+        stat_model_margin = shrunk_eff_diff + hca_val - (h_inj_pen - a_inj_pen) - (h_fat_pen - a_fat_pen)
 
         raw_total = raw_h_pts + raw_a_pts
         league_avg_total = avg_off * 2.0
         model_total = (0.75 * raw_total + 0.25 * league_avg_total) - (h_inj_pen + a_inj_pen) * 0.65 - (h_fat_pen + a_fat_pen) * 0.50
 
-        fg_spread_abs = abs(model_margin)
+        fg_spread_abs = abs(stat_model_margin)
 
         # --- A. FULL-GAME TOTALS & SPREADS (8.0% EV THRESHOLD) ---
         if SCAN_FULL_GAME:
@@ -1213,7 +1213,16 @@ def scan_all_fanduel_markets():
                         h_line = float(home_o["point"])
                         fg_spread_abs = abs(h_line)
                         if bet_key not in already_posted:
+                            # Anchor 80% True Net Rating Margin + 20% Market Margin to prevent unpriced roster mirages
+                            mkt_home_cons, _ = get_devigged_spread_consensus(other_books, "spreads", home, h_line)
+                            mkt_margin_anchor = -(mkt_home_cons if mkt_home_cons is not None else h_line)
+                            model_margin = 0.80 * stat_model_margin + 0.20 * mkt_margin_anchor
+
                             sp_diff = model_margin - (-h_line)
+                            # Block extreme >6.0 pt spread dislocations (signals unpriced tanking/lineup scratch)
+                            if abs(sp_diff) > 6.0:
+                                continue
+
                             pick_team = home if sp_diff >= 0 else away
                             opp_team = away if sp_diff >= 0 else home
                             pick_gtd_stars = h_gtd_stars if pick_team == home else a_gtd_stars
@@ -1280,11 +1289,15 @@ def scan_all_fanduel_markets():
 
                 fd_ev_markets, other_ev_books = extract_fanduel_and_consensus(ev_data.get("bookmakers", []))
 
-                # Pace-Scaled & Regressed Period Team Projections
+                # Pace-Scaled & Regressed Period Team Projections (Totals)
                 q1_h_pts = (((h_stats["q1_off"] + a_stats["q1_def"]) / 2.0) * pace_scaler) - (h_inj_pen * 0.22)
                 q1_a_pts = (((a_stats["q1_off"] + h_stats["q1_def"]) / 2.0) * pace_scaler) - (a_inj_pen * 0.22)
                 h1_h_pts = (((h_stats["h1_off"] + a_stats["h1_def"]) / 2.0) * pace_scaler) - (h_inj_pen * 0.46) - (h_fat_pen * 0.35)
                 h1_a_pts = (((a_stats["h1_off"] + h_stats["h1_def"]) / 2.0) * pace_scaler) - (a_inj_pen * 0.46) - (a_fat_pen * 0.35)
+
+                # True Period Net Rating Differentials (Fixes 0.50x double-halving on 1Q/1H spreads)
+                true_q1_net_diff = (((h_stats["q1_off"] - h_stats["q1_def"]) - (a_stats["q1_off"] - a_stats["q1_def"])) * pace_scaler) - ((h_inj_pen - a_inj_pen) * 0.22)
+                true_h1_net_diff = (((h_stats["h1_off"] - h_stats["h1_def"]) - (a_stats["h1_off"] - a_stats["h1_def"])) * pace_scaler) - ((h_inj_pen - a_inj_pen) * 0.46) - ((h_fat_pen - a_fat_pen) * 0.35)
 
                 raw_q1_tot = q1_h_pts + q1_a_pts
                 raw_h1_tot = h1_h_pts + h1_a_pts
@@ -1347,10 +1360,18 @@ def scan_all_fanduel_markets():
                         away_o = next((o for o in m["outcomes"] if normalize_team_name(o["name"]) == away), None)
                         if home_o and away_o and bet_key not in already_posted:
                             h_line = float(home_o["point"])
-                            raw_p_diff = (q1_h_pts - q1_a_pts) if is_q1 else (h1_h_pts - h1_a_pts)
+                            raw_p_diff = true_q1_net_diff if is_q1 else true_h1_net_diff
                             hca_p = (hca_val * 0.25) if is_q1 else (hca_val * 0.50)
-                            p_margin = (raw_p_diff * SPREAD_SHRINKAGE) + hca_p
+                            stat_p_margin = (raw_p_diff * SPREAD_SHRINKAGE) + hca_p
+
+                            mkt_p_home, _ = get_devigged_spread_consensus(other_ev_books, m_key, home, h_line)
+                            mkt_p_anchor = -(mkt_p_home if mkt_p_home is not None else h_line)
+                            p_margin = 0.80 * stat_p_margin + 0.20 * mkt_p_anchor
+
                             sp_diff = p_margin - (-h_line)
+                            max_p_dislocation = 2.5 if is_q1 else 3.8
+                            if abs(sp_diff) > max_p_dislocation:
+                                continue
 
                             pick_team = home if sp_diff >= 0 else away
                             pick_gtd_stars = h_gtd_stars if pick_team == home else a_gtd_stars
@@ -1429,6 +1450,7 @@ def scan_all_fanduel_markets():
                             l10_avg = p_info.get(f"L10_{stat_code}", base_avg)
                             szn_min = p_info.get("SZN_MIN", 24.0)
                             l5_min = p_info.get("L5_MIN", szn_min)
+                            l3_min = p_info.get("L3_MIN", l5_min)
                             p_pos = p_info.get("POS", "G")
                             p_team = normalize_team_name(p_info.get("TEAM", ""))
 
@@ -1458,15 +1480,26 @@ def scan_all_fanduel_markets():
                             matchup_mult = (0.50 * team_def_mult) + (0.50 * emp_pos_mult)
                             blended_def_rk = int(round(0.50 * opp_def_rk + 0.50 * emp_pos_rk))
 
-                            # --- 2. MINUTE-TREND SCALING & ACTIVE-ROTATION USAGE/MINUTES BOOST ---
-                            min_trend_mult = float(np.clip(l5_min / max(12.0, szn_min), 0.90, 1.12))
+                            # --- 2. L3/L5 MINUTE COMPRESSION & USAGE BOOST ---
+                            recent_min = min(l5_min, l3_min)
+                            min_ratio = recent_min / max(12.0, szn_min)
+                            # If recent minutes dropped (like Drummond returning to backup role), scale down fully down to 0.70x
+                            if min_ratio < 0.92:
+                                min_weight_mult = float(np.clip(min_ratio, 0.70, 0.92))
+                            else:
+                                min_weight_mult = 0.50 + 0.50 * float(np.clip(l5_min / max(12.0, szn_min), 0.92, 1.12))
+
                             usage_boost_mult, missing_team_impact, missing_team_mins = calc_teammate_usage_boost(norm_p, p_team, p_pos, stat_code, player_db, confirmed_out, questionable_gtd)
 
                             pace_mult = exp_pace / avg_pace
-                            lambda_proj = base_avg * (0.75 * matchup_mult + 0.25 * pace_mult) * (0.50 + 0.50 * min_trend_mult) * usage_boost_mult
+                            lambda_proj = base_avg * (0.75 * matchup_mult + 0.25 * pace_mult) * min_weight_mult * usage_boost_mult
 
-                            if fg_spread_abs >= 13.5 and lambda_proj > line:
-                                lambda_proj *= 0.95
+                            # Graduated 4Q Blowout Risk Discount on Overs (Starts at 8.5+ Spreads)
+                            if lambda_proj > line:
+                                if fg_spread_abs >= 12.0:
+                                    lambda_proj *= 0.92
+                                elif fg_spread_abs >= 8.5:
+                                    lambda_proj *= 0.96
 
                             # --- 3. OVERDISPERSED SCORING MATH (PTS/PRA) vs POISSON (REB/AST/3PM) ---
                             if stat_code in ["PTS", "PRA"]:
@@ -1481,6 +1514,10 @@ def scan_all_fanduel_markets():
                                 pick_dir, stat_win_prob, juice = "Over", prob_over, int(sides["Over"]["price"])
                             else:
                                 pick_dir, stat_win_prob, juice = "Under", prob_under, int(sides["Under"]["price"])
+
+                            # Block Over bets if a player's recent minutes (L3/L5) dropped 15%+ below season average
+                            if pick_dir == "Over" and min_ratio <= 0.85 and usage_boost_mult < 1.04:
+                                continue
 
                             # --- 4. SPOT-STARTER / MISSING-TEAMMATE-MINUTES UNDER SAFEGUARD ---
                             if is_spot_starter_under_trap(pick_dir, stat_code, line, szn_avg, l10_avg, szn_min, usage_boost_mult, missing_team_impact, missing_team_mins):
@@ -1706,7 +1743,7 @@ def check_scores_and_grade_all_markets():
     post_daily_recaps_if_complete(tracked_bets)
 
 if __name__ == "__main__":
-    print("🤖 LIVE NBA EV BOT (V8 MISSING-MINUTES & TEAM-RESOLVER ENGINE) IS LIVE!")
+    print("🤖 LIVE NBA EV BOT (V9 TRUE NET RATING SPREAD & MINUTE COMPRESSION ENGINE) IS LIVE!")
     last_scan = 0
     while True:
         now_ts = time.time()

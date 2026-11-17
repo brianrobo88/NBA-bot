@@ -9,41 +9,51 @@ from datetime import datetime, timedelta, timezone
 import pytz
 
 # ==========================================
-# 1. CREDENTIALS & SEPARATE EV FILTERS
+# 1. CREDENTIALS & 20K PLAN CONFIGURATION
 # ==========================================
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
-THE_ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY", "9ecb23956a7654b951782fd28ec3a8b5").strip()
 
-# Market Toggles
+NEW_PAID_ODDS_KEY = "b7d67c68e4dd79b7bc22fb02f8d82e73"
+_env_odds_key = os.getenv("THE_ODDS_API_KEY", "").strip()
+THE_ODDS_API_KEY = (
+    NEW_PAID_ODDS_KEY
+    if (not _env_odds_key or _env_odds_key == "9ecb23956a7654b951782fd28ec3a8b5")
+    else _env_odds_key
+)
+
+# Market Toggles (All Unlocked for 20K Plan)
 SCAN_FULL_GAME = True         # Full-Game Spreads & Totals
 SCAN_HALVES_QUARTERS = True   # 1st Half & 1st Quarter Spreads & Totals
 SCAN_PLAYER_PROPS = True      # Starters & Role Players: PTS, REB, AST
-SCAN_PRA_AND_3PM = False      # Optional: Set True to also scan PRA & 3PM (uses +2 credits/game)
+SCAN_PRA_AND_3PM = True       # Unlocked: Scans PRA & 3PM on every game
+SCAN_Q1_PLAYER_PROPS = True   # 1st Quarter Starter Props (7+/10 L10 Hit Rate Filter)
 
-# Separate Minimum EV Filters
+# Separate Minimum EV & Hit-Rate Filters
 MIN_EDGE_TEAM_MARKETS = 0.110 # 11.0% Minimum EV for Full-Game & 1Q/1H Spreads and Totals
-MIN_EDGE_PLAYER_PROPS = 0.150 # 15.0% Minimum EV for Player Props
+MIN_EDGE_PLAYER_PROPS = 0.150 # 15.0% Minimum EV for Full-Game Player Props
+MIN_Q1_L10_HITS = 7           # Requires >= 7 hits in Last 10 games for 1Q Starter Props
+MAX_Q1_PROP_JUICE = -165      # Blocks heavily juiced unplayable 1Q lines (e.g. -210)
 
-# Up to 10 bookmakers cost the exact same 1-region credit in The Odds API
-BOOKMAKERS_LIST = "fanduel,draftkings,betmgm,caesars"
+# Up to 10 US bookmakers cost the exact same 1-region credit in The Odds API
+BOOKMAKERS_LIST = "fanduel,draftkings,betmgm,caesars,espnbet,betrivers"
 
-MAX_DEEP_SCAN_GAMES_PER_RUN = 8
-LOOKBACK_DAYS_FOR_STATS = 25  # Covers full season-to-date + rolling L10/L5/L3 game logs
+MAX_DEEP_SCAN_GAMES_PER_RUN = 15 # Scans full slate (up to 15 games) per pass
+LOOKBACK_DAYS_FOR_STATS = 30     # 30-day window ensures full 10-game (L10) logs for starters
 
 # Minimum Prop Line & Minutes Filters (Avoids micro-line & deep-bench traps)
 MIN_PROP_LINE_PTS = 7.5
 MIN_PROP_LINE_OTHER = 3.5
 MIN_PROP_LINE_3PM = 1.5
-MIN_PLAYER_AVG_MINUTES = 16.0 # Requires player to average 16+ MPG to avoid garbage-time traps
+MIN_PLAYER_AVG_MINUTES = 16.0
+MIN_STARTER_AVG_MINUTES = 22.0
 
 TRACKER_FILE = "tracked_all_markets.json"
-SCANNED_EVENTS_FILE = "scanned_prop_events.json"
 LIVE_STATS_CACHE_FILE = "live_nba_stats_cache.json"
 RECAP_POSTED_FILE = "daily_recaps_posted.json"
-CACHE_SCHEMA_VERSION = "v10_11pct_team_single_total_cap"
+CACHE_SCHEMA_VERSION = "v12_q1_starter_props_l10"
 
 SCORE_CHECK_SECONDS = 300     # Checks ESPN scores every 5 mins (FREE)
-FANDUEL_SCAN_SECONDS = 7200   # Scans FanDuel every 2 hours
+FANDUEL_SCAN_SECONDS = 2700   # Rescans FanDuel & Injury Reports every 45 mins until tip-off
 
 NBA_STD_DEV_TOTAL = 16.0
 NBA_STD_DEV_SPREAD = 12.5
@@ -243,6 +253,103 @@ def get_devigged_spread_consensus(other_books, market_key, pick_team, fd_line):
     avg_line = round(float(np.mean(pts)), 1) if pts else None
     avg_prob = float(np.mean(devig_probs)) if devig_probs else None
     return avg_line, avg_prob
+
+def extract_q1_player_stats_from_summary(sum_data):
+    """
+    Parses ESPN's play-by-play ('plays') array for Period 1 to compute exact
+    1st Quarter PTS, REB, and AST for every active player in the game.
+    """
+    plays = sum_data.get("plays", [])
+    p_boxes = sum_data.get("boxscore", {}).get("players", [])
+    if not plays or not p_boxes:
+        return {}
+
+    id_to_norm = {}
+    q1_stats = {}
+
+    for tb in p_boxes:
+        stat_blk = (tb.get("statistics") or [{}])[0]
+        labels = stat_blk.get("labels", [])
+        min_idx = labels.index("MIN") if "MIN" in labels else -1
+        for ath in stat_blk.get("athletes", []):
+            if ath.get("didNotPlay"):
+                continue
+            s_vals = ath.get("stats", [])
+            if min_idx != -1 and s_vals:
+                min_raw = str(s_vals[min_idx]).split(":")[0]
+                mins = float(min_raw) if min_raw.isdigit() else 0.0
+                if mins <= 0.0:
+                    continue
+            ath_obj = ath.get("athlete", {})
+            p_disp = ath_obj.get("displayName", "")
+            ath_id = str(ath_obj.get("id", ""))
+            if p_disp:
+                norm_p = normalize_name(p_disp)
+                q1_stats[norm_p] = {"PTS": 0.0, "REB": 0.0, "AST": 0.0}
+                if ath_id:
+                    id_to_norm[ath_id] = norm_p
+
+    for play in plays:
+        if play.get("period", {}).get("number") != 1:
+            continue
+        text = str(play.get("text", "")).strip()
+        if not text:
+            continue
+        text_lower = text.lower()
+        type_text = str(play.get("type", {}).get("text", "")).lower()
+        parts = play.get("participants", [])
+
+        # 1. Scoring Plays (PTS & AST)
+        if play.get("scoringPlay"):
+            pts_val = float(play.get("scoreValue") or 0)
+            if pts_val <= 0:
+                if "free throw" in text_lower or "technical" in text_lower:
+                    pts_val = 1.0
+                elif "three point" in text_lower or "3-pt" in text_lower:
+                    pts_val = 3.0
+                else:
+                    pts_val = 2.0
+
+            scorer_norm = ""
+            if parts:
+                scorer_id = str(parts[0].get("athlete", {}).get("id", ""))
+                scorer_norm = id_to_norm.get(scorer_id, "")
+            if not scorer_norm and " makes " in text:
+                scorer_norm = normalize_name(text.split(" makes ")[0])
+            if scorer_norm in q1_stats:
+                q1_stats[scorer_norm]["PTS"] += pts_val
+
+            if "assists)" in text_lower and "(" in text:
+                inside_paren = text.split("(")[-1].split(")")[0]
+                ast_raw = inside_paren.replace(" assists", "").replace(" Assists", "").strip()
+                assister_norm = normalize_name(ast_raw)
+                if assister_norm not in q1_stats and len(parts) >= 2:
+                    ast_id = str(parts[1].get("athlete", {}).get("id", ""))
+                    assister_norm = id_to_norm.get(ast_id, "")
+                if assister_norm in q1_stats:
+                    q1_stats[assister_norm]["AST"] += 1.0
+
+        # 2. Rebounds (Offensive & Defensive)
+        elif "rebound" in type_text or "rebound" in text_lower:
+            if "team rebound" in text_lower or "team" in type_text:
+                continue
+            reb_norm = ""
+            if parts:
+                reb_id = str(parts[0].get("athlete", {}).get("id", ""))
+                reb_norm = id_to_norm.get(reb_id, "")
+            if not reb_norm:
+                reb_raw = (
+                    text.split(" defensive rebound")[0]
+                    .split(" offensive rebound")[0]
+                    .split(" Defensive Rebound")[0]
+                    .split(" Offensive Rebound")[0]
+                    .strip()
+                )
+                reb_norm = normalize_name(reb_raw)
+            if reb_norm in q1_stats:
+                q1_stats[reb_norm]["REB"] += 1.0
+
+    return q1_stats
 
 def get_team_efficiency_baselines():
     return {
@@ -582,7 +689,7 @@ def sync_live_nba_data():
             cached["fatigue_map"]
         )
 
-    print("🔄 Syncing V10 NBA Engine: 11% Team EV Floor, 1-Total-Per-Game Cap, & Empirical DvP...")
+    print("🔄 Syncing V12 NBA Engine: 1Q Starter Play-by-Play Logs (L10), PRA/3PM, & 6-Book De-Vig...")
 
     # 1. Layer Official ESPN Season Averages on top of Fallback Dictionary
     espn_season_stats = fetch_espn_season_averages()
@@ -609,6 +716,10 @@ def sync_live_nba_data():
             "L5_MIN": s_data["MIN"],
             "L3_MIN": s_data["MIN"],
             "RECENT_GAMES": 0,
+            "IS_STARTER": False,
+            "Q1_PTS_L10": [],
+            "Q1_REB_L10": [],
+            "Q1_AST_L10": [],
             "POS": s_data["POS"],
             "TEAM": resolved_team
         }
@@ -620,6 +731,10 @@ def sync_live_nba_data():
         p_data.setdefault("L5_MIN", 24.0)
         p_data.setdefault("L3_MIN", 24.0)
         p_data.setdefault("RECENT_GAMES", 0)
+        p_data.setdefault("IS_STARTER", False)
+        p_data.setdefault("Q1_PTS_L10", [])
+        p_data.setdefault("Q1_REB_L10", [])
+        p_data.setdefault("Q1_AST_L10", [])
         for k in ["PTS", "REB", "AST", "3PM", "PRA"]:
             p_data.setdefault(f"SZN_{k}", p_data[k])
             p_data.setdefault(f"L10_{k}", p_data[k])
@@ -660,6 +775,9 @@ def sync_live_nba_data():
                 ev_id = ev["id"]
                 sum_url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event={ev_id}"
                 sum_data = requests.get(sum_url, timeout=8).json()
+
+                # Extract Period 1 play-by-play stats for all players in this game
+                q1_game_map = extract_q1_player_stats_from_summary(sum_data)
 
                 comps = sum_data.get("header", {}).get("competitions", [{}])[0].get("competitors", [])
                 if len(comps) == 2:
@@ -709,6 +827,7 @@ def sync_live_nba_data():
 
                         t_pts, t_reb, t_ast = 0.0, 0.0, 0.0
                         pos_buckets = {pos: {"PTS": 0.0, "REB": 0.0, "AST": 0.0} for pos in ["G", "F", "C"]}
+                        active_slot = 0
 
                         for ath in stat_blk.get("athletes", []):
                             if ath.get("didNotPlay"):
@@ -725,6 +844,9 @@ def sync_live_nba_data():
                                 mins = float(min_raw) if min_raw.isdigit() else 0.0
                                 if mins <= 0.0:
                                     continue
+                                active_slot += 1
+                                is_game_starter = bool(ath.get("starter")) if "starter" in ath else (active_slot <= 5)
+
                                 pts = float(s_vals[pts_idx]) if pts_idx != -1 else 0.0
                                 reb = float(s_vals[reb_idx]) if reb_idx != -1 else 0.0
                                 ast = float(s_vals[ast_idx]) if ast_idx != -1 else 0.0
@@ -742,14 +864,25 @@ def sync_live_nba_data():
                                 pos_buckets[mapped_pos]["AST"] += ast
 
                                 if norm_p not in player_logs:
-                                    player_logs[norm_p] = {"PTS": [], "REB": [], "AST": [], "3PM": [], "PRA": [], "MIN": [], "TEAM": t_name, "POS": mapped_pos}
+                                    player_logs[norm_p] = {
+                                        "PTS": [], "REB": [], "AST": [], "3PM": [], "PRA": [], "MIN": [],
+                                        "STARTS": [], "Q1_PTS": [], "Q1_REB": [], "Q1_AST": [],
+                                        "TEAM": t_name, "POS": mapped_pos
+                                    }
                                 player_logs[norm_p]["PTS"].append(pts)
                                 player_logs[norm_p]["REB"].append(reb)
                                 player_logs[norm_p]["AST"].append(ast)
                                 player_logs[norm_p]["3PM"].append(tpm)
                                 player_logs[norm_p]["PRA"].append(pts + reb + ast)
                                 player_logs[norm_p]["MIN"].append(mins)
+                                player_logs[norm_p]["STARTS"].append(1 if is_game_starter else 0)
                                 player_logs[norm_p]["TEAM"] = t_name
+
+                                # Record 1st-Quarter stats for games where the player started (or played 18+ mins)
+                                if norm_p in q1_game_map and (is_game_starter or mins >= 18.0):
+                                    player_logs[norm_p]["Q1_PTS"].append(q1_game_map[norm_p]["PTS"])
+                                    player_logs[norm_p]["Q1_REB"].append(q1_game_map[norm_p]["REB"])
+                                    player_logs[norm_p]["Q1_AST"].append(q1_game_map[norm_p]["AST"])
                             except:
                                 continue
                         team_totals[t_name] = {"PTS": t_pts, "REB": t_reb, "AST": t_ast}
@@ -797,7 +930,7 @@ def sync_live_nba_data():
             "tag": "/".join(tags) if tags else ""
         }
 
-    # Blend 50% Official Season Avg (SZN) + 50% Last 10 Games (L10) & Track L5/L3 Minutes
+    # Blend 50% Official Season Avg (SZN) + 50% Last 10 Games (L10) & Store Starter Q1 L10 Logs
     for norm_p, logs in player_logs.items():
         games_count = len(logs["PTS"])
         if games_count >= 1:
@@ -833,6 +966,15 @@ def sync_live_nba_data():
             else:
                 szn_pts, szn_reb, szn_ast, szn_3pm, szn_pra, szn_min = full_pts, full_reb, full_ast, full_3pm, full_pra, full_min
 
+            starts_list = logs.get("STARTS", [])
+            start_rate = float(np.mean(starts_list)) if starts_list else 0.0
+            recent_starts = sum(starts_list[-5:])
+            is_normal_starter = bool(
+                games_count >= 3
+                and szn_min >= MIN_STARTER_AVG_MINUTES
+                and (start_rate >= 0.60 or recent_starts >= 3)
+            )
+
             pos_val = player_db.get(norm_p, {}).get("POS", logs.get("POS", "G"))
             player_db[norm_p] = {
                 "PTS": round(0.50 * szn_pts + 0.50 * l10_pts, 2),
@@ -854,6 +996,10 @@ def sync_live_nba_data():
                 "L5_MIN": round(l5_min, 1),
                 "L3_MIN": round(l3_min, 1),
                 "RECENT_GAMES": games_count,
+                "IS_STARTER": is_normal_starter,
+                "Q1_PTS_L10": logs["Q1_PTS"][-10:],
+                "Q1_REB_L10": logs["Q1_REB"][-10:],
+                "Q1_AST_L10": logs["Q1_AST"][-10:],
                 "POS": pos_val,
                 "TEAM": logs["TEAM"]
             }
@@ -926,7 +1072,8 @@ def sync_live_nba_data():
         "pos_def_mults": pos_def_mults,
         "fatigue_map": fatigue_map
     })
-    print(f"✅ Synced {len(player_db)} players, 11% Team EV Floor, & 1-Total-Per-Game Cap!")
+    starter_cnt = sum(1 for v in player_db.values() if v.get("IS_STARTER"))
+    print(f"✅ Synced {len(player_db)} players ({starter_cnt} verified starters with 1Q L10 logs) & 6-Book Consensus!")
     return team_db, player_db, opp_ranks, pos_ranks, pos_def_mults, fatigue_map
 
 def fetch_injured_players():
@@ -1082,7 +1229,6 @@ def post_alert_to_discord(base_text, prefix="⏳ "):
 def scan_all_fanduel_markets():
     tracked_bets = load_json(TRACKER_FILE, [])
     already_posted = {b["bet_key"] for b in tracked_bets}
-    scanned_events = set(load_json(SCANNED_EVENTS_FILE, []))
     prop_excluded, confirmed_out, questionable_gtd = fetch_injured_players()
 
     stats_db, player_db, opp_ranks, pos_ranks, pos_def_mults, fatigue_map = sync_live_nba_data()
@@ -1107,7 +1253,7 @@ def scan_all_fanduel_markets():
     }
 
     res = requests.get(url, params=params, timeout=10)
-    print(f"📊 V10 Multi-Book FanDuel Sync for {today_ct_str}! (Credits Remaining: {res.headers.get('x-requests-remaining')})")
+    print(f"📊 V12 (20K Plan + 1Q Starter Props) Sync for {today_ct_str}! (Credits Remaining: {res.headers.get('x-requests-remaining')})")
     if res.status_code != 200:
         return
 
@@ -1277,8 +1423,8 @@ def scan_all_fanduel_markets():
                                     tracked_bets.append({"bet_key": bet_key, "message_id": msg_id, "away": away, "home": home, "market": "FG_SPREAD", "pick_team": pick_team, "line": pick_line, "juice": juice, "units": units, "base_text": base_text, "status": "PENDING"})
                                     already_posted.add(bet_key)
 
-        # --- B. DEEP SCAN: 1H / 1Q & ALL STARTERS / ROLE PLAYER PROPS ---
-        if (SCAN_HALVES_QUARTERS or SCAN_PLAYER_PROPS) and (event_id not in scanned_events) and (deep_scans_done < MAX_DEEP_SCAN_GAMES_PER_RUN):
+        # --- B. DEEP SCAN: 1H / 1Q, FULL-GAME PROPS & 1Q STARTER PROPS ---
+        if (SCAN_HALVES_QUARTERS or SCAN_PLAYER_PROPS or SCAN_Q1_PLAYER_PROPS) and (deep_scans_done < MAX_DEEP_SCAN_GAMES_PER_RUN):
             extra_markets = []
             if SCAN_HALVES_QUARTERS:
                 extra_markets.extend(["totals_h1", "spreads_h1", "totals_q1", "spreads_q1"])
@@ -1286,6 +1432,8 @@ def scan_all_fanduel_markets():
                 extra_markets.extend(["player_points", "player_rebounds", "player_assists"])
                 if SCAN_PRA_AND_3PM:
                     extra_markets.extend(["player_points_rebounds_assists", "player_threes"])
+            if SCAN_Q1_PLAYER_PROPS:
+                extra_markets.extend(["player_points_q1", "player_rebounds_q1", "player_assists_q1"])
 
             ev_url = f"https://api.the-odds-api.com/v4/sports/basketball_nba/events/{event_id}/odds"
             ev_params = {
@@ -1298,7 +1446,6 @@ def scan_all_fanduel_markets():
             ev_res = requests.get(ev_url, params=ev_params, timeout=10)
             if ev_res.status_code == 200:
                 deep_scans_done += 1
-                scanned_events.add(event_id)
                 ev_data = ev_res.json()
 
                 fd_ev_markets, other_ev_books = extract_fanduel_and_consensus(ev_data.get("bookmakers", []))
@@ -1573,6 +1720,118 @@ def scan_all_fanduel_markets():
                                     tracked_bets.append({"bet_key": bet_key, "message_id": msg_id, "away": away, "home": home, "market": "PLAYER_PROP", "player": p_name, "stat": stat_code, "line": line, "pick_dir": pick_dir, "juice": juice, "units": units, "dot": dot, "base_text": base_text, "status": "PENDING"})
                                     already_posted.add(bet_key)
 
+                    # --- D. 1ST QUARTER STARTER PROPS (7+/10 L10 HIT RATE ENGINE) ---
+                    elif m_key in ["player_points_q1", "player_rebounds_q1", "player_assists_q1"]:
+                        q1_stat_map = {
+                            "player_points_q1": "PTS",
+                            "player_rebounds_q1": "REB",
+                            "player_assists_q1": "AST"
+                        }
+                        stat_code = q1_stat_map[m_key]
+                        players_in_q1_market = {}
+                        for o in m["outcomes"]:
+                            p_name = o.get("description", "")
+                            if p_name not in players_in_q1_market:
+                                players_in_q1_market[p_name] = {}
+                            players_in_q1_market[p_name][o["name"]] = o
+
+                        for p_name, sides in players_in_q1_market.items():
+                            norm_p = normalize_name(p_name)
+                            if norm_p in prop_excluded or norm_p not in player_db or "Over" not in sides or "Under" not in sides:
+                                continue
+
+                            p_info = player_db[norm_p]
+                            # 1. Must be a verified normal starter
+                            if not p_info.get("IS_STARTER", False):
+                                continue
+
+                            p_team = normalize_team_name(p_info.get("TEAM", ""))
+                            if p_team not in [home, away]:
+                                continue
+
+                            bet_key = f"{match_key}_{norm_p}_Q1_{stat_code}"
+                            if bet_key in already_posted:
+                                continue
+
+                            q1_logs = p_info.get(f"Q1_{stat_code}_L10", [])[-10:]
+                            if len(q1_logs) < MIN_Q1_L10_HITS:
+                                continue
+
+                            line = float(sides["Over"]["point"])
+                            over_hits = sum(1 for v in q1_logs if v > line)
+                            under_hits = sum(1 for v in q1_logs if v < line)
+
+                            if over_hits >= MIN_Q1_L10_HITS:
+                                pick_dir = "Over"
+                                hits = over_hits
+                                juice = int(sides["Over"]["price"])
+                            elif under_hits >= MIN_Q1_L10_HITS:
+                                pick_dir = "Under"
+                                hits = under_hits
+                                juice = int(sides["Under"]["price"])
+                            else:
+                                continue
+
+                            # Skip unplayable heavy juice (worse than -165)
+                            if juice < MAX_Q1_PROP_JUICE:
+                                continue
+
+                            p_pos = p_info.get("POS", "G")
+                            usage_boost_mult, missing_team_impact, missing_team_mins = calc_teammate_usage_boost(norm_p, p_team, p_pos, stat_code, player_db, confirmed_out, questionable_gtd)
+
+                            # Protect 1Q Unders if key rotation teammates are Out/GTD
+                            if pick_dir == "Under" and (usage_boost_mult >= 1.05 or missing_team_mins >= 22.0):
+                                continue
+
+                            # Check multi-book 1Q consensus so we don't bet into a bad line
+                            mkt_cons, mkt_prob = get_devigged_total_or_prop_consensus(other_ev_books, m_key, pick_dir, line, p_name)
+                            if mkt_cons is not None:
+                                if (pick_dir == "Over" and (mkt_cons - line) <= -1.0) or (pick_dir == "Under" and (mkt_cons - line) >= 1.0):
+                                    continue
+
+                            if p_team == home:
+                                opp_team_name, opp_r, opp_ab_str = away, a_ranks, a_ab
+                            else:
+                                opp_team_name, opp_r, opp_ab_str = home, h_ranks, h_ab
+
+                            opp_def_rk = opp_r[stat_code]
+                            emp_pos_rk = pos_ranks.get(opp_team_name, {}).get(p_pos, {}).get(stat_code, opp_def_rk)
+                            blended_def_rk = int(round(0.50 * opp_def_rk + 0.50 * emp_pos_rk))
+                            dot = get_matchup_dot(blended_def_rk, pick_dir)
+
+                            n_games = len(q1_logs)
+                            hit_rate = hits / float(n_games)
+                            q1_avg = float(np.mean(q1_logs))
+                            est_win_prob = (0.75 * hit_rate + 0.25 * mkt_prob) if mkt_prob is not None else (0.85 * hit_rate)
+                            units = calc_kelly_units(est_win_prob, juice)
+                            usage_tag = " ⚡+Usage" if (usage_boost_mult >= 1.04 and pick_dir == "Over") else ""
+
+                            base_text = (
+                                f"**{p_name} — 1Q {pick_dir} {line} {stat_code}** `({juice:+d})`\n"
+                                f"🎯 **L{n_games} Hit Rate: {hits}/{n_games} ({hit_rate*100:.0f}%)** `({units:.1f}u)`  •  📊 1Q Avg: **{q1_avg:.1f}**\n"
+                                f"{dot} vs {opp_ab_str} Def: **#{opp_def_rk}** *({p_pos}: #{emp_pos_rk})*{usage_tag}  •  🏀 {a_ab}@{h_ab} *({time_short})*\n"
+                                f"{DIVIDER}"
+                            )
+                            msg_id = post_alert_to_discord(base_text)
+                            if msg_id:
+                                tracked_bets.append({
+                                    "bet_key": bet_key,
+                                    "message_id": msg_id,
+                                    "away": away,
+                                    "home": home,
+                                    "market": "PLAYER_PROP_Q1",
+                                    "player": p_name,
+                                    "stat": stat_code,
+                                    "line": line,
+                                    "pick_dir": pick_dir,
+                                    "juice": juice,
+                                    "units": units,
+                                    "dot": dot,
+                                    "base_text": base_text,
+                                    "status": "PENDING"
+                                })
+                                already_posted.add(bet_key)
+
         # --- C. POST SINGLE HIGHEST-EV TOTAL FOR THIS GAME (FG vs 1H vs 1Q) ---
         if game_total_candidates and not has_posted_game_total:
             best_edge, best_text, best_payload = max(game_total_candidates, key=lambda x: x[0])
@@ -1583,7 +1842,6 @@ def scan_all_fanduel_markets():
                 already_posted.add(best_payload["bet_key"])
 
     save_json(TRACKER_FILE, tracked_bets)
-    save_json(SCANNED_EVENTS_FILE, list(scanned_events))
 
 def post_daily_recaps_if_complete(tracked_bets):
     """Automatically posts a Daily W-L & Unit ROI Recap Card once a slate finishes grading."""
@@ -1621,15 +1879,17 @@ def post_daily_recaps_if_complete(tracked_bets):
 
         prop_w = sum(1 for b in wins if b.get("market") == "PLAYER_PROP")
         prop_l = sum(1 for b in losses if b.get("market") == "PLAYER_PROP")
+        q1p_w = sum(1 for b in wins if b.get("market") == "PLAYER_PROP_Q1")
+        q1p_l = sum(1 for b in losses if b.get("market") == "PLAYER_PROP_Q1")
         fg_w = sum(1 for b in wins if b.get("market") in ["FG_TOTAL", "FG_SPREAD"])
         fg_l = sum(1 for b in losses if b.get("market") in ["FG_TOTAL", "FG_SPREAD"])
-        per_w = sum(1 for b in wins if "Q1" in b.get("market", "") or "H1" in b.get("market", ""))
-        per_l = sum(1 for b in losses if "Q1" in b.get("market", "") or "H1" in b.get("market", ""))
+        per_w = sum(1 for b in wins if b.get("market") in ["TOTALS_Q1", "SPREADS_Q1", "TOTALS_H1", "SPREADS_H1"])
+        per_l = sum(1 for b in losses if b.get("market") in ["TOTALS_Q1", "SPREADS_Q1", "TOTALS_H1", "SPREADS_H1"])
 
         recap_text = (
             f"**📊 NBA BOT DAILY RECAP ({d_str})**\n"
             f"🏆 **Record: {tot_w}–{tot_l} ({win_pct:.1f}%)**  •  💰 **Kelly: {net_kelly_u:+.2f}u** *(Flat: {net_flat_u:+.2f}u)*\n"
-            f"🏀 Props: **{prop_w}–{prop_l}**  •  🛡️ FG: **{fg_w}–{fg_l}**  •  ⚡ 1Q/1H: **{per_w}–{per_l}**\n"
+            f"🏀 FG Props: **{prop_w}–{prop_l}**  •  🎯 1Q Props: **{q1p_w}–{q1p_l}**  •  🛡️ FG: **{fg_w}–{fg_l}**  •  ⚡ 1Q/1H: **{per_w}–{per_l}**\n"
             f"{DIVIDER}"
         )
         if post_alert_to_discord(recap_text, prefix=""):
@@ -1680,40 +1940,54 @@ def check_scores_and_grade_all_markets():
         a_lines = [float(x.get("displayValue") or x.get("value") or 0) for x in away_c.get("linescores", [])]
 
         player_stats_map = {}
-        has_props = any(
+        q1_player_stats_map = {}
+
+        has_fg_props = any(
             b["status"] == "PENDING"
             and b["market"] == "PLAYER_PROP"
             and b["home"] == h_name
             and b["bet_key"].startswith(d_iso)
             for b in tracked_bets
         )
-        if is_final and has_props:
+        has_q1_props = any(
+            b["status"] == "PENDING"
+            and b["market"] == "PLAYER_PROP_Q1"
+            and b["home"] == h_name
+            and b["bet_key"].startswith(d_iso)
+            for b in tracked_bets
+        )
+
+        if (is_final and has_fg_props) or ((period > 1 or is_final) and has_q1_props):
             sum_url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event={event['id']}"
             try:
                 sum_data = requests.get(sum_url, timeout=10).json()
-                for team_box in sum_data.get("boxscore", {}).get("players", []):
-                    stat_Block = team_box["statistics"][0]
-                    labels = stat_Block["labels"]
-                    pts_idx = labels.index("PTS") if "PTS" in labels else -1
-                    reb_idx = labels.index("REB") if "REB" in labels else -1
-                    ast_idx = labels.index("AST") if "AST" in labels else -1
-                    tpm_idx = labels.index("3PT") if "3PT" in labels else -1
-                    for ath in stat_Block.get("athletes", []):
-                        p_disp = normalize_name(ath["athlete"]["displayName"])
-                        s_vals = ath.get("stats", [])
-                        if s_vals:
-                            pts_v = float(s_vals[pts_idx]) if pts_idx != -1 else 0.0
-                            reb_v = float(s_vals[reb_idx]) if reb_idx != -1 else 0.0
-                            ast_v = float(s_vals[ast_idx]) if ast_idx != -1 else 0.0
-                            tpm_raw = str(s_vals[tpm_idx]).split("-")[0] if tpm_idx != -1 else "0"
-                            tpm_v = float(tpm_raw) if tpm_raw.isdigit() else 0.0
-                            player_stats_map[p_disp] = {
-                                "PTS": pts_v,
-                                "REB": reb_v,
-                                "AST": ast_v,
-                                "3PM": tpm_v,
-                                "PRA": pts_v + reb_v + ast_v
-                            }
+                if (period > 1 or is_final) and has_q1_props:
+                    q1_player_stats_map = extract_q1_player_stats_from_summary(sum_data)
+
+                if is_final and has_fg_props:
+                    for team_box in sum_data.get("boxscore", {}).get("players", []):
+                        stat_Block = team_box["statistics"][0]
+                        labels = stat_Block["labels"]
+                        pts_idx = labels.index("PTS") if "PTS" in labels else -1
+                        reb_idx = labels.index("REB") if "REB" in labels else -1
+                        ast_idx = labels.index("AST") if "AST" in labels else -1
+                        tpm_idx = labels.index("3PT") if "3PT" in labels else -1
+                        for ath in stat_Block.get("athletes", []):
+                            p_disp = normalize_name(ath["athlete"]["displayName"])
+                            s_vals = ath.get("stats", [])
+                            if s_vals:
+                                pts_v = float(s_vals[pts_idx]) if pts_idx != -1 else 0.0
+                                reb_v = float(s_vals[reb_idx]) if reb_idx != -1 else 0.0
+                                ast_v = float(s_vals[ast_idx]) if ast_idx != -1 else 0.0
+                                tpm_raw = str(s_vals[tpm_idx]).split("-")[0] if tpm_idx != -1 else "0"
+                                tpm_v = float(tpm_raw) if tpm_raw.isdigit() else 0.0
+                                player_stats_map[p_disp] = {
+                                    "PTS": pts_v,
+                                    "REB": reb_v,
+                                    "AST": ast_v,
+                                    "3PM": tpm_v,
+                                    "PRA": pts_v + reb_v + ast_v
+                                }
             except:
                 pass
 
@@ -1760,6 +2034,11 @@ def check_scores_and_grade_all_markets():
                 if norm_bet_p in player_stats_map:
                     actual_stat = player_stats_map[norm_bet_p].get(bet["stat"], 0.0)
                     did_win = (actual_stat > bet["line"]) if bet["pick_dir"] == "Over" else (actual_stat < bet["line"])
+            elif mkt == "PLAYER_PROP_Q1" and (period > 1 or is_final):
+                norm_bet_p = normalize_name(bet["player"])
+                if norm_bet_p in q1_player_stats_map:
+                    actual_q1_stat = q1_player_stats_map[norm_bet_p].get(bet["stat"], 0.0)
+                    did_win = (actual_q1_stat > bet["line"]) if bet["pick_dir"] == "Over" else (actual_q1_stat < bet["line"])
 
             if did_win is not None and DISCORD_WEBHOOK_URL:
                 icon = "✅" if did_win else "❌"
@@ -1774,7 +2053,7 @@ def check_scores_and_grade_all_markets():
     post_daily_recaps_if_complete(tracked_bets)
 
 if __name__ == "__main__":
-    print("🤖 LIVE NBA EV BOT (V10 11% TEAM EV & 1-TOTAL-PER-GAME CAP) IS LIVE!")
+    print("🤖 LIVE NBA EV BOT (V12: 20K PLAN + 1Q STARTER PROPS L10 ENGINE) IS LIVE!")
     last_scan = 0
     while True:
         now_ts = time.time()

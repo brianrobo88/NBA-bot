@@ -21,7 +21,7 @@ SCAN_PLAYER_PROPS = True      # Starters & Role Players: PTS, REB, AST
 SCAN_PRA_AND_3PM = False      # Optional: Set True to also scan PRA & 3PM (uses +2 credits/game)
 
 # Separate Minimum EV Filters
-MIN_EDGE_TEAM_MARKETS = 0.080 # 8.0% Minimum EV for Full-Game & 1Q/1H Spreads and Totals
+MIN_EDGE_TEAM_MARKETS = 0.110 # 11.0% Minimum EV for Full-Game & 1Q/1H Spreads and Totals
 MIN_EDGE_PLAYER_PROPS = 0.150 # 15.0% Minimum EV for Player Props
 
 # Up to 10 bookmakers cost the exact same 1-region credit in The Odds API
@@ -40,7 +40,7 @@ TRACKER_FILE = "tracked_all_markets.json"
 SCANNED_EVENTS_FILE = "scanned_prop_events.json"
 LIVE_STATS_CACHE_FILE = "live_nba_stats_cache.json"
 RECAP_POSTED_FILE = "daily_recaps_posted.json"
-CACHE_SCHEMA_VERSION = "v9_true_net_rating_spreads"
+CACHE_SCHEMA_VERSION = "v10_11pct_team_single_total_cap"
 
 SCORE_CHECK_SECONDS = 300     # Checks ESPN scores every 5 mins (FREE)
 FANDUEL_SCAN_SECONDS = 7200   # Scans FanDuel every 2 hours
@@ -582,7 +582,7 @@ def sync_live_nba_data():
             cached["fatigue_map"]
         )
 
-    print("🔄 Syncing V9 NBA Engine: True Net Rating Spreads, L3/L5 Minute Compression Guard, & Empirical DvP...")
+    print("🔄 Syncing V10 NBA Engine: 11% Team EV Floor, 1-Total-Per-Game Cap, & Empirical DvP...")
 
     # 1. Layer Official ESPN Season Averages on top of Fallback Dictionary
     espn_season_stats = fetch_espn_season_averages()
@@ -926,7 +926,7 @@ def sync_live_nba_data():
         "pos_def_mults": pos_def_mults,
         "fatigue_map": fatigue_map
     })
-    print(f"✅ Synced {len(player_db)} players, True Net Rating Spreads, & L3/L5 Minute Guards!")
+    print(f"✅ Synced {len(player_db)} players, 11% Team EV Floor, & 1-Total-Per-Game Cap!")
     return team_db, player_db, opp_ranks, pos_ranks, pos_def_mults, fatigue_map
 
 def fetch_injured_players():
@@ -1107,7 +1107,7 @@ def scan_all_fanduel_markets():
     }
 
     res = requests.get(url, params=params, timeout=10)
-    print(f"📊 V9 Multi-Book FanDuel Sync for {today_ct_str}! (Credits Remaining: {res.headers.get('x-requests-remaining')})")
+    print(f"📊 V10 Multi-Book FanDuel Sync for {today_ct_str}! (Credits Remaining: {res.headers.get('x-requests-remaining')})")
     if res.status_code != 200:
         return
 
@@ -1134,6 +1134,13 @@ def scan_all_fanduel_markets():
         time_short = dt_utc.astimezone(central_tz).strftime("%-I:%M%p").lower()
         match_key = f"{date_str}_{away}_vs_{home}"
 
+        # Track whether any total (FG, 1H, or 1Q) has already been posted for this game
+        has_posted_game_total = any(
+            f"{match_key}_{sfx}" in already_posted
+            for sfx in ["FG_TOTAL", "totals_h1", "totals_q1"]
+        )
+        game_total_candidates = []
+
         h_stats = stats_db.get(home, {"off": avg_off, "def": avg_off, "pace": avg_pace, "opp_reb": avg_opp_reb, "opp_ast": avg_opp_ast, "q1_off": avg_q1_off, "q1_def": avg_q1_off, "h1_off": avg_h1_off, "h1_def": avg_h1_off})
         a_stats = stats_db.get(away, {"off": avg_off, "def": avg_off, "pace": avg_pace, "opp_reb": avg_opp_reb, "opp_ast": avg_opp_ast, "q1_off": avg_q1_off, "q1_def": avg_q1_off, "h1_off": avg_h1_off, "h1_def": avg_h1_off})
         h_ranks = opp_ranks.get(home, {"PTS": 15, "REB": 15, "AST": 15, "3PM": 15, "PRA": 15})
@@ -1155,7 +1162,7 @@ def scan_all_fanduel_markets():
         a_fat_pen = calc_team_fatigue_penalty(away, False, fatigue_map)
         hca_val = get_team_hca(home)
 
-        # 3. TRUE NET RATING DIFFERENTIAL (Fixes the 0.50x double-halving bug on spreads)
+        # 3. TRUE NET RATING DIFFERENTIAL
         true_net_rtg_diff = ((h_stats["off"] - h_stats["def"]) - (a_stats["off"] - a_stats["def"])) * pace_scaler
         shrunk_eff_diff = true_net_rtg_diff * SPREAD_SHRINKAGE
         stat_model_margin = shrunk_eff_diff + hca_val - (h_inj_pen - a_inj_pen) - (h_fat_pen - a_fat_pen)
@@ -1166,12 +1173,12 @@ def scan_all_fanduel_markets():
 
         fg_spread_abs = abs(stat_model_margin)
 
-        # --- A. FULL-GAME TOTALS & SPREADS (8.0% EV THRESHOLD) ---
+        # --- A. FULL-GAME TOTALS & SPREADS (11.0% EV THRESHOLD) ---
         if SCAN_FULL_GAME:
             for m in fd_markets:
                 if m["key"] == "totals":
                     bet_key = f"{match_key}_FG_TOTAL"
-                    if bet_key not in already_posted and (h_gtd_stars + a_gtd_stars) < 3:
+                    if not has_posted_game_total and bet_key not in already_posted and (h_gtd_stars + a_gtd_stars) < 3:
                         over_o = next((o for o in m["outcomes"] if o["name"] == "Over"), None)
                         under_o = next((o for o in m["outcomes"] if o["name"] == "Under"), None)
                         if over_o and under_o:
@@ -1200,10 +1207,19 @@ def scan_all_fanduel_markets():
                                     f"🛡️ Def: {a_ab} #{a_ranks['PTS']} vs {h_ab} #{h_ranks['PTS']}  •  🕒 {time_short}\n"
                                     f"{DIVIDER}"
                                 )
-                                msg_id = post_alert_to_discord(base_text)
-                                if msg_id:
-                                    tracked_bets.append({"bet_key": bet_key, "message_id": msg_id, "away": away, "home": home, "market": "FG_TOTAL", "line": line, "pick_dir": pick_dir, "juice": juice, "units": units, "base_text": base_text, "status": "PENDING"})
-                                    already_posted.add(bet_key)
+                                payload = {
+                                    "bet_key": bet_key,
+                                    "away": away,
+                                    "home": home,
+                                    "market": "FG_TOTAL",
+                                    "line": line,
+                                    "pick_dir": pick_dir,
+                                    "juice": juice,
+                                    "units": units,
+                                    "base_text": base_text,
+                                    "status": "PENDING"
+                                }
+                                game_total_candidates.append((edge, base_text, payload))
 
                 elif m["key"] == "spreads":
                     bet_key = f"{match_key}_FG_SPREAD"
@@ -1213,13 +1229,11 @@ def scan_all_fanduel_markets():
                         h_line = float(home_o["point"])
                         fg_spread_abs = abs(h_line)
                         if bet_key not in already_posted:
-                            # Anchor 80% True Net Rating Margin + 20% Market Margin to prevent unpriced roster mirages
                             mkt_home_cons, _ = get_devigged_spread_consensus(other_books, "spreads", home, h_line)
                             mkt_margin_anchor = -(mkt_home_cons if mkt_home_cons is not None else h_line)
                             model_margin = 0.80 * stat_model_margin + 0.20 * mkt_margin_anchor
 
                             sp_diff = model_margin - (-h_line)
-                            # Block extreme >6.0 pt spread dislocations (signals unpriced tanking/lineup scratch)
                             if abs(sp_diff) > 6.0:
                                 continue
 
@@ -1295,7 +1309,7 @@ def scan_all_fanduel_markets():
                 h1_h_pts = (((h_stats["h1_off"] + a_stats["h1_def"]) / 2.0) * pace_scaler) - (h_inj_pen * 0.46) - (h_fat_pen * 0.35)
                 h1_a_pts = (((a_stats["h1_off"] + h_stats["h1_def"]) / 2.0) * pace_scaler) - (a_inj_pen * 0.46) - (a_fat_pen * 0.35)
 
-                # True Period Net Rating Differentials (Fixes 0.50x double-halving on 1Q/1H spreads)
+                # True Period Net Rating Differentials
                 true_q1_net_diff = (((h_stats["q1_off"] - h_stats["q1_def"]) - (a_stats["q1_off"] - a_stats["q1_def"])) * pace_scaler) - ((h_inj_pen - a_inj_pen) * 0.22)
                 true_h1_net_diff = (((h_stats["h1_off"] - h_stats["h1_def"]) - (a_stats["h1_off"] - a_stats["h1_def"])) * pace_scaler) - ((h_inj_pen - a_inj_pen) * 0.46) - ((h_fat_pen - a_fat_pen) * 0.35)
 
@@ -1308,7 +1322,7 @@ def scan_all_fanduel_markets():
                     m_key = m["key"]
 
                     if m_key in ["totals_h1", "totals_q1"]:
-                        if (h_gtd_stars + a_gtd_stars) >= 3:
+                        if has_posted_game_total or (h_gtd_stars + a_gtd_stars) >= 3:
                             continue
                         is_q1 = (m_key == "totals_q1")
                         period_label = "1Q" if is_q1 else "1H"
@@ -1345,10 +1359,19 @@ def scan_all_fanduel_markets():
                                     f"⚡ Period Matchup Sync  •  🕒 {time_short}\n"
                                     f"{DIVIDER}"
                                 )
-                                msg_id = post_alert_to_discord(base_text)
-                                if msg_id:
-                                    tracked_bets.append({"bet_key": bet_key, "message_id": msg_id, "away": away, "home": home, "market": m_key.upper(), "line": line, "pick_dir": pick_dir, "juice": juice, "units": units, "base_text": base_text, "status": "PENDING"})
-                                    already_posted.add(bet_key)
+                                payload = {
+                                    "bet_key": bet_key,
+                                    "away": away,
+                                    "home": home,
+                                    "market": m_key.upper(),
+                                    "line": line,
+                                    "pick_dir": pick_dir,
+                                    "juice": juice,
+                                    "units": units,
+                                    "base_text": base_text,
+                                    "status": "PENDING"
+                                }
+                                game_total_candidates.append((edge, base_text, payload))
 
                     elif m_key in ["spreads_h1", "spreads_q1"]:
                         is_q1 = (m_key == "spreads_q1")
@@ -1483,7 +1506,6 @@ def scan_all_fanduel_markets():
                             # --- 2. L3/L5 MINUTE COMPRESSION & USAGE BOOST ---
                             recent_min = min(l5_min, l3_min)
                             min_ratio = recent_min / max(12.0, szn_min)
-                            # If recent minutes dropped (like Drummond returning to backup role), scale down fully down to 0.70x
                             if min_ratio < 0.92:
                                 min_weight_mult = float(np.clip(min_ratio, 0.70, 0.92))
                             else:
@@ -1550,6 +1572,15 @@ def scan_all_fanduel_markets():
                                 if msg_id:
                                     tracked_bets.append({"bet_key": bet_key, "message_id": msg_id, "away": away, "home": home, "market": "PLAYER_PROP", "player": p_name, "stat": stat_code, "line": line, "pick_dir": pick_dir, "juice": juice, "units": units, "dot": dot, "base_text": base_text, "status": "PENDING"})
                                     already_posted.add(bet_key)
+
+        # --- C. POST SINGLE HIGHEST-EV TOTAL FOR THIS GAME (FG vs 1H vs 1Q) ---
+        if game_total_candidates and not has_posted_game_total:
+            best_edge, best_text, best_payload = max(game_total_candidates, key=lambda x: x[0])
+            msg_id = post_alert_to_discord(best_text)
+            if msg_id:
+                best_payload["message_id"] = msg_id
+                tracked_bets.append(best_payload)
+                already_posted.add(best_payload["bet_key"])
 
     save_json(TRACKER_FILE, tracked_bets)
     save_json(SCANNED_EVENTS_FILE, list(scanned_events))
@@ -1743,7 +1774,7 @@ def check_scores_and_grade_all_markets():
     post_daily_recaps_if_complete(tracked_bets)
 
 if __name__ == "__main__":
-    print("🤖 LIVE NBA EV BOT (V9 TRUE NET RATING SPREAD & MINUTE COMPRESSION ENGINE) IS LIVE!")
+    print("🤖 LIVE NBA EV BOT (V10 11% TEAM EV & 1-TOTAL-PER-GAME CAP) IS LIVE!")
     last_scan = 0
     while True:
         now_ts = time.time()

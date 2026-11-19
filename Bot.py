@@ -1,3 +1,4 @@
+import sys
 import time
 import json
 import os
@@ -50,10 +51,11 @@ MIN_STARTER_AVG_MINUTES = 22.0
 TRACKER_FILE = "tracked_all_markets.json"
 LIVE_STATS_CACHE_FILE = "live_nba_stats_cache.json"
 RECAP_POSTED_FILE = "daily_recaps_posted.json"
-CACHE_SCHEMA_VERSION = "v12_q1_starter_props_l10"
+CACHE_SCHEMA_VERSION = "v13_red_1q_1prop_pra_guard"
 
 SCORE_CHECK_SECONDS = 300     # Checks ESPN scores every 5 mins (FREE)
 FANDUEL_SCAN_SECONDS = 2700   # Rescans FanDuel & Injury Reports every 45 mins until tip-off
+MAX_RUNTIME_SECONDS = 19800   # Clean exit at 5h 30m so GitHub Actions commits JSON state before 6h kill
 
 NBA_STD_DEV_TOTAL = 16.0
 NBA_STD_DEV_SPREAD = 12.5
@@ -388,7 +390,7 @@ def get_team_efficiency_baselines():
 def get_fallback_player_baselines():
     raw_baselines = {
         "Jayson Tatum": {"PTS": 28.4, "REB": 8.5, "AST": 5.4, "POS": "F", "TEAM": "Boston Celtics"},
-        "Jaylen Brown": {"PTS": 25.2, "REB": 6.1, "AST": 4.2, "POS": "G", "TEAM": "Boston Celtics"},
+        "Jaylen Brown": {"PTS": 22.6, "REB": 6.6, "AST": 4.0, "POS": "G", "TEAM": "Philadelphia 76ers"},
         "Derrick White": {"PTS": 16.8, "REB": 4.3, "AST": 5.1, "POS": "G", "TEAM": "Boston Celtics"},
         "Jrue Holiday": {"PTS": 12.8, "REB": 4.8, "AST": 4.6, "POS": "G", "TEAM": "Boston Celtics"},
         "Kristaps Porzingis": {"PTS": 19.5, "REB": 7.1, "AST": 2.0, "POS": "C", "TEAM": "Boston Celtics"},
@@ -525,10 +527,10 @@ def get_fallback_player_baselines():
         "Ryan Conwell": {"PTS": 5.8, "REB": 1.6, "AST": 1.3, "POS": "G", "TEAM": "Miami Heat"},
         "Pelle Larsson": {"PTS": 9.8, "REB": 3.6, "AST": 2.4, "POS": "G", "TEAM": "Miami Heat"},
         "Andre Drummond": {"PTS": 6.8, "REB": 7.9, "AST": 0.8, "POS": "C", "TEAM": "New York Knicks"},
-        "Tyrese Maxey": {"PTS": 27.6, "REB": 3.8, "AST": 6.4, "POS": "G", "TEAM": "Philadelphia 76ers"},
-        "Joel Embiid": {"PTS": 26.8, "REB": 10.4, "AST": 4.8, "POS": "C", "TEAM": "Philadelphia 76ers"},
+        "Tyrese Maxey": {"PTS": 26.5, "REB": 3.8, "AST": 6.4, "POS": "G", "TEAM": "Philadelphia 76ers"},
+        "Joel Embiid": {"PTS": 19.5, "REB": 8.5, "AST": 3.5, "POS": "C", "TEAM": "Philadelphia 76ers"},
         "Paul George": {"PTS": 18.6, "REB": 5.6, "AST": 4.4, "POS": "F", "TEAM": "Philadelphia 76ers"},
-        "Kelly Oubre Jr": {"PTS": 13.8, "REB": 4.8, "AST": 1.6, "POS": "F", "TEAM": "Philadelphia 76ers"},
+        "Kelly Oubre Jr": {"PTS": 13.8, "REB": 4.8, "AST": 1.6, "POS": "F", "TEAM": "Indiana Pacers"},
         "Jared McCain": {"PTS": 15.2, "REB": 2.6, "AST": 2.8, "POS": "G", "TEAM": "Philadelphia 76ers"},
         "Bam Adebayo": {"PTS": 20.2, "REB": 10.4, "AST": 4.1, "POS": "C", "TEAM": "Miami Heat"},
         "Tyler Herro": {"PTS": 23.4, "REB": 5.2, "AST": 4.8, "POS": "G", "TEAM": "Miami Heat"},
@@ -563,7 +565,7 @@ def get_fallback_player_baselines():
         "Nikola Vucevic": {"PTS": 18.2, "REB": 10.8, "AST": 3.4, "POS": "C", "TEAM": "Chicago Bulls"},
         "Coby White": {"PTS": 19.4, "REB": 4.2, "AST": 4.8, "POS": "G", "TEAM": "Chicago Bulls"},
         "Josh Giddey": {"PTS": 13.2, "REB": 6.8, "AST": 6.9, "POS": "G", "TEAM": "Chicago Bulls"},
-        "Ayo Dosunmu": {"PTS": 12.4, "REB": 3.6, "AST": 3.8, "POS": "G", "TEAM": "Chicago Bulls"},
+        "Ayo Dosunmu": {"PTS": 12.4, "REB": 3.6, "AST": 3.8, "POS": "G", "TEAM": "Minnesota Timberwolves"},
         "Scottie Barnes": {"PTS": 20.8, "REB": 8.2, "AST": 6.4, "POS": "F", "TEAM": "Toronto Raptors"},
         "RJ Barrett": {"PTS": 22.6, "REB": 6.2, "AST": 5.8, "POS": "F", "TEAM": "Toronto Raptors"},
         "Immanuel Quickley": {"PTS": 17.4, "REB": 3.8, "AST": 6.4, "POS": "G", "TEAM": "Toronto Raptors"},
@@ -571,10 +573,10 @@ def get_fallback_player_baselines():
         "Gradey Dick": {"PTS": 16.8, "REB": 3.4, "AST": 2.1, "POS": "G", "TEAM": "Toronto Raptors"},
         "Cam Thomas": {"PTS": 24.2, "REB": 3.4, "AST": 3.4, "POS": "G", "TEAM": "Brooklyn Nets"},
         "Dennis Schroder": {"PTS": 17.8, "REB": 3.1, "AST": 6.4, "POS": "G", "TEAM": "Brooklyn Nets"},
-        "Cameron Johnson": {"PTS": 18.2, "REB": 4.4, "AST": 2.9, "POS": "F", "TEAM": "Brooklyn Nets"},
+        "Cameron Johnson": {"PTS": 18.2, "REB": 4.4, "AST": 2.9, "POS": "F", "TEAM": "Denver Nuggets"},
         "Nic Claxton": {"PTS": 10.4, "REB": 8.4, "AST": 2.2, "POS": "C", "TEAM": "Brooklyn Nets"},
         "Jordan Poole": {"PTS": 20.2, "REB": 2.6, "AST": 4.8, "POS": "G", "TEAM": "Washington Wizards"},
-        "Kyle Kuzma": {"PTS": 17.8, "REB": 6.2, "AST": 3.2, "POS": "F", "TEAM": "Washington Wizards"},
+        "Kyle Kuzma": {"PTS": 17.8, "REB": 6.2, "AST": 3.2, "POS": "F", "TEAM": "Milwaukee Bucks"},
         "Alex Sarr": {"PTS": 10.8, "REB": 7.6, "AST": 2.1, "POS": "C", "TEAM": "Washington Wizards"},
         "Bilal Coulibaly": {"PTS": 12.4, "REB": 5.4, "AST": 2.8, "POS": "F", "TEAM": "Washington Wizards"},
         "Kyshawn George": {"PTS": 15.4, "REB": 4.6, "AST": 4.2, "POS": "G", "TEAM": "Washington Wizards"},
@@ -689,7 +691,7 @@ def sync_live_nba_data():
             cached["fatigue_map"]
         )
 
-    print("🔄 Syncing V12 NBA Engine: 1Q Starter Play-by-Play Logs (L10), PRA/3PM, & 6-Book De-Vig...")
+    print("🔄 Syncing V13 NBA Engine: Red-Block 1Q, 1-Prop/Player Cap, & Star-Absence PRA Guard...")
 
     # 1. Layer Official ESPN Season Averages on top of Fallback Dictionary
     espn_season_stats = fetch_espn_season_averages()
@@ -776,7 +778,6 @@ def sync_live_nba_data():
                 sum_url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event={ev_id}"
                 sum_data = requests.get(sum_url, timeout=8).json()
 
-                # Extract Period 1 play-by-play stats for all players in this game
                 q1_game_map = extract_q1_player_stats_from_summary(sum_data)
 
                 comps = sum_data.get("header", {}).get("competitions", [{}])[0].get("competitors", [])
@@ -878,7 +879,6 @@ def sync_live_nba_data():
                                 player_logs[norm_p]["STARTS"].append(1 if is_game_starter else 0)
                                 player_logs[norm_p]["TEAM"] = t_name
 
-                                # Record 1st-Quarter stats for games where the player started (or played 18+ mins)
                                 if norm_p in q1_game_map and (is_game_starter or mins >= 18.0):
                                     player_logs[norm_p]["Q1_PTS"].append(q1_game_map[norm_p]["PTS"])
                                     player_logs[norm_p]["Q1_REB"].append(q1_game_map[norm_p]["REB"])
@@ -1073,7 +1073,7 @@ def sync_live_nba_data():
         "fatigue_map": fatigue_map
     })
     starter_cnt = sum(1 for v in player_db.values() if v.get("IS_STARTER"))
-    print(f"✅ Synced {len(player_db)} players ({starter_cnt} verified starters with 1Q L10 logs) & 6-Book Consensus!")
+    print(f"✅ Synced {len(player_db)} players ({starter_cnt} verified starters with 1Q L10 logs) & V13 Guards!")
     return team_db, player_db, opp_ranks, pos_ranks, pos_def_mults, fatigue_map
 
 def fetch_injured_players():
@@ -1195,16 +1195,31 @@ def calc_teammate_usage_boost(norm_p, team_name, player_pos, stat_code, player_d
     return min(1.15, mult), total_missing_impact, missing_team_mins
 
 def is_spot_starter_under_trap(pick_dir, stat_code, line, szn_avg, l10_avg, szn_min, usage_boost_mult, missing_team_impact, missing_team_mins):
-    """Blocks Under bets on role players whose lines or minutes are inflated by teammate absences."""
+    """
+    Blocks Under bets when lines or usage spike due to teammate absences:
+    - Applies to ALL players (including 30+ MPG stars) when 30+ star impact or 35+ rotation mins are Out/GTD.
+    - Blocks PRA Unders with a +4.5 absolute jump (or +18% jump when teammates are Out/GTD).
+    """
     if pick_dir != "Under":
         return False
     anchor = max(szn_avg, l10_avg, 0.5)
+    # 1. Never bet Under on low-minute players (< 16 MPG)
     if szn_min < MIN_PLAYER_AVG_MINUTES:
         return True
+    # 2. Major Star-Absence Guard (No 29 MPG exemption — protects against Embiid-style traps)
+    if missing_team_impact >= 30.0 or missing_team_mins >= 35.0:
+        return True
+    # 3. Role-player missing-minutes guard (< 29 MPG)
     if szn_min < 29.0 and (missing_team_mins >= 18.0 or usage_boost_mult >= 1.03 or missing_team_impact >= 20.0):
         return True
+    # 4. Sportsbook inflated-line jump guards
     if line >= (anchor * 1.28):
         return True
+    if stat_code == "PRA":
+        if (line - anchor) >= 4.5:
+            return True
+        if (missing_team_impact >= 15.0 or missing_team_mins >= 18.0) and line >= (anchor * 1.18):
+            return True
     if stat_code == "PTS" and (line - anchor) >= 3.5:
         return True
     if stat_code in ["REB", "AST"] and (line - anchor) >= 1.6:
@@ -1253,7 +1268,7 @@ def scan_all_fanduel_markets():
     }
 
     res = requests.get(url, params=params, timeout=10)
-    print(f"📊 V12 (20K Plan + 1Q Starter Props) Sync for {today_ct_str}! (Credits Remaining: {res.headers.get('x-requests-remaining')})")
+    print(f"📊 V13 Multi-Book Sync for {today_ct_str}! (Credits Remaining: {res.headers.get('x-requests-remaining')})")
     if res.status_code != 200:
         return
 
@@ -1286,6 +1301,7 @@ def scan_all_fanduel_markets():
             for sfx in ["FG_TOTAL", "totals_h1", "totals_q1"]
         )
         game_total_candidates = []
+        player_fg_prop_candidates = {}
 
         h_stats = stats_db.get(home, {"off": avg_off, "def": avg_off, "pace": avg_pace, "opp_reb": avg_opp_reb, "opp_ast": avg_opp_ast, "q1_off": avg_q1_off, "q1_def": avg_q1_off, "h1_off": avg_h1_off, "h1_def": avg_h1_off})
         a_stats = stats_db.get(away, {"off": avg_off, "def": avg_off, "pace": avg_pace, "opp_reb": avg_opp_reb, "opp_ast": avg_opp_ast, "q1_off": avg_q1_off, "q1_def": avg_q1_off, "h1_off": avg_h1_off, "h1_def": avg_h1_off})
@@ -1598,10 +1614,16 @@ def scan_all_fanduel_markets():
                             norm_p = normalize_name(p_name)
                             if norm_p in prop_excluded or norm_p not in player_db or "Over" not in sides or "Under" not in sides:
                                 continue
-                            bet_key = f"{match_key}_{norm_p}_{stat_code}"
-                            if bet_key in already_posted:
+
+                            # 1 Full-Game Prop Cap Per Player (Blocks multi-prop stacking on same player)
+                            has_posted_player_fg_prop = any(
+                                f"{match_key}_{norm_p}_{sfx}" in already_posted
+                                for sfx in ["PTS", "REB", "AST", "PRA", "3PM"]
+                            )
+                            if has_posted_player_fg_prop:
                                 continue
 
+                            bet_key = f"{match_key}_{norm_p}_{stat_code}"
                             line = float(sides["Over"]["point"])
                             if stat_code == "PTS" and line < MIN_PROP_LINE_PTS:
                                 continue
@@ -1688,7 +1710,7 @@ def scan_all_fanduel_markets():
                             if pick_dir == "Over" and min_ratio <= 0.85 and usage_boost_mult < 1.04:
                                 continue
 
-                            # --- 4. SPOT-STARTER / MISSING-TEAMMATE-MINUTES UNDER SAFEGUARD ---
+                            # --- 4. SPOT-STARTER / STAR-ABSENCE / PRA-JUMP UNDER SAFEGUARD ---
                             if is_spot_starter_under_trap(pick_dir, stat_code, line, szn_avg, l10_avg, szn_min, usage_boost_mult, missing_team_impact, missing_team_mins):
                                 continue
 
@@ -1715,12 +1737,24 @@ def scan_all_fanduel_markets():
                                     f"{dot} vs {opp_ab_str} Def: **#{opp_def_rk}** *({p_pos}: #{emp_pos_rk})*{usage_tag}  •  🏀 {a_ab}@{h_ab} *({time_short})*\n"
                                     f"{DIVIDER}"
                                 )
-                                msg_id = post_alert_to_discord(base_text)
-                                if msg_id:
-                                    tracked_bets.append({"bet_key": bet_key, "message_id": msg_id, "away": away, "home": home, "market": "PLAYER_PROP", "player": p_name, "stat": stat_code, "line": line, "pick_dir": pick_dir, "juice": juice, "units": units, "dot": dot, "base_text": base_text, "status": "PENDING"})
-                                    already_posted.add(bet_key)
+                                payload = {
+                                    "bet_key": bet_key,
+                                    "away": away,
+                                    "home": home,
+                                    "market": "PLAYER_PROP",
+                                    "player": p_name,
+                                    "stat": stat_code,
+                                    "line": line,
+                                    "pick_dir": pick_dir,
+                                    "juice": juice,
+                                    "units": units,
+                                    "dot": dot,
+                                    "base_text": base_text,
+                                    "status": "PENDING"
+                                }
+                                player_fg_prop_candidates.setdefault(norm_p, []).append((edge, base_text, payload))
 
-                    # --- D. 1ST QUARTER STARTER PROPS (7+/10 L10 HIT RATE ENGINE) ---
+                    # --- D. 1ST QUARTER STARTER PROPS (7+/10 L10 HIT RATE + RED MATCHUP BLOCK) ---
                     elif m_key in ["player_points_q1", "player_rebounds_q1", "player_assists_q1"]:
                         q1_stat_map = {
                             "player_points_q1": "PTS",
@@ -1741,7 +1775,6 @@ def scan_all_fanduel_markets():
                                 continue
 
                             p_info = player_db[norm_p]
-                            # 1. Must be a verified normal starter
                             if not p_info.get("IS_STARTER", False):
                                 continue
 
@@ -1772,7 +1805,6 @@ def scan_all_fanduel_markets():
                             else:
                                 continue
 
-                            # Skip unplayable heavy juice (worse than -165)
                             if juice < MAX_Q1_PROP_JUICE:
                                 continue
 
@@ -1780,10 +1812,9 @@ def scan_all_fanduel_markets():
                             usage_boost_mult, missing_team_impact, missing_team_mins = calc_teammate_usage_boost(norm_p, p_team, p_pos, stat_code, player_db, confirmed_out, questionable_gtd)
 
                             # Protect 1Q Unders if key rotation teammates are Out/GTD
-                            if pick_dir == "Under" and (usage_boost_mult >= 1.05 or missing_team_mins >= 22.0):
+                            if pick_dir == "Under" and (usage_boost_mult >= 1.05 or missing_team_mins >= 22.0 or missing_team_impact >= 25.0):
                                 continue
 
-                            # Check multi-book 1Q consensus so we don't bet into a bad line
                             mkt_cons, mkt_prob = get_devigged_total_or_prop_consensus(other_ev_books, m_key, pick_dir, line, p_name)
                             if mkt_cons is not None:
                                 if (pick_dir == "Over" and (mkt_cons - line) <= -1.0) or (pick_dir == "Under" and (mkt_cons - line) >= 1.0):
@@ -1798,6 +1829,10 @@ def scan_all_fanduel_markets():
                             emp_pos_rk = pos_ranks.get(opp_team_name, {}).get(p_pos, {}).get(stat_code, opp_def_rk)
                             blended_def_rk = int(round(0.50 * opp_def_rk + 0.50 * emp_pos_rk))
                             dot = get_matchup_dot(blended_def_rk, pick_dir)
+
+                            # V13 Filter: Block Red Matchups on 1Q Starter Props
+                            if dot == "🔴":
+                                continue
 
                             n_games = len(q1_logs)
                             hit_rate = hits / float(n_games)
@@ -1831,6 +1866,15 @@ def scan_all_fanduel_markets():
                                     "status": "PENDING"
                                 })
                                 already_posted.add(bet_key)
+
+                # --- POST SINGLE HIGHEST-EV FULL-GAME PROP PER PLAYER ---
+                for norm_p, cand_list in player_fg_prop_candidates.items():
+                    best_edge, best_text, best_payload = max(cand_list, key=lambda x: x[0])
+                    msg_id = post_alert_to_discord(best_text)
+                    if msg_id:
+                        best_payload["message_id"] = msg_id
+                        tracked_bets.append(best_payload)
+                        already_posted.add(best_payload["bet_key"])
 
         # --- C. POST SINGLE HIGHEST-EV TOTAL FOR THIS GAME (FG vs 1H vs 1Q) ---
         if game_total_candidates and not has_posted_game_total:
@@ -1906,8 +1950,8 @@ def check_scores_and_grade_all_markets():
     central_tz = pytz.timezone("America/Chicago")
     now_ct = datetime.now(timezone.utc).astimezone(central_tz)
     date_pairs = [
-        ((now_ct - timedelta(days=1)).strftime("%Y%m%d"), (now_ct - timedelta(days=1)).strftime("%Y-%m-%d")),
-        (now_ct.strftime("%Y%m%d"), now_ct.strftime("%Y-%m-%d"))
+        ((now_ct - timedelta(days=d)).strftime("%Y%m%d"), (now_ct - timedelta(days=d)).strftime("%Y-%m-%d"))
+        for d in [2, 1, 0]
     ]
 
     events_with_dates = []
@@ -2053,12 +2097,22 @@ def check_scores_and_grade_all_markets():
     post_daily_recaps_if_complete(tracked_bets)
 
 if __name__ == "__main__":
-    print("🤖 LIVE NBA EV BOT (V12: 20K PLAN + 1Q STARTER PROPS L10 ENGINE) IS LIVE!")
+    if "--grade-only" in sys.argv:
+        print("🏁 Running V13 Overnight Grading & Daily Recap Check...")
+        check_scores_and_grade_all_markets()
+        print("✅ Grading pass complete.")
+        sys.exit(0)
+
+    print("🤖 LIVE NBA EV BOT (V13: RED-1Q BLOCK + 1-PROP/PLAYER CAP + PRA GUARD) IS LIVE!")
+    start_ts = time.time()
     last_scan = 0
-    while True:
+    while (time.time() - start_ts) < MAX_RUNTIME_SECONDS:
         now_ts = time.time()
         if (now_ts - last_scan) >= FANDUEL_SCAN_SECONDS:
             scan_all_fanduel_markets()
             last_scan = now_ts
         check_scores_and_grade_all_markets()
         time.sleep(SCORE_CHECK_SECONDS)
+
+    print("⏰ Reached 5.5h clean-exit window. Running final grading check before saving state...")
+    check_scores_and_grade_all_markets()

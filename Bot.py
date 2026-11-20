@@ -27,16 +27,24 @@ SCAN_FULL_GAME = True         # Full-Game Spreads & Totals
 SCAN_HALVES_QUARTERS = True   # 1st Half & 1st Quarter Spreads & Totals
 SCAN_PLAYER_PROPS = True      # Starters & Role Players: PTS, REB, AST
 SCAN_PRA_AND_3PM = True       # Unlocked: Scans PRA & 3PM on every game
-SCAN_Q1_PLAYER_PROPS = True   # 1st Quarter Starter Props (7+/10 L10 Hit Rate Filter)
+SCAN_Q1_PLAYER_PROPS = True   # 1st Quarter Starter Props: PTS, REB, AST (7+/10 L10 Filter)
 
 # Separate Minimum EV & Hit-Rate Filters
 MIN_EDGE_TEAM_MARKETS = 0.110 # 11.0% Minimum EV for Full-Game & 1Q/1H Spreads and Totals
 MIN_EDGE_PLAYER_PROPS = 0.150 # 15.0% Minimum EV for Full-Game Player Props
 MIN_Q1_L10_HITS = 7           # Requires >= 7 hits in Last 10 games for 1Q Starter Props
-MAX_Q1_PROP_JUICE = -165      # Blocks heavily juiced unplayable 1Q lines (e.g. -210)
+MAX_Q1_PROP_JUICE = -165      # Blocks heavily juiced unplayable 1Q lines (e.g. -210, -550)
 
 # Up to 10 US bookmakers cost the exact same 1-region credit in The Odds API
 BOOKMAKERS_LIST = "fanduel,draftkings,betmgm,caesars,espnbet,betrivers"
+BOOK_LABELS = {
+    "fanduel": "FD",
+    "draftkings": "DK",
+    "betmgm": "MGM",
+    "caesars": "CZR",
+    "espnbet": "ESPN",
+    "betrivers": "BR"
+}
 
 MAX_DEEP_SCAN_GAMES_PER_RUN = 15 # Scans full slate (up to 15 games) per pass
 LOOKBACK_DAYS_FOR_STATS = 30     # 30-day window ensures full 10-game (L10) logs for starters
@@ -51,7 +59,7 @@ MIN_STARTER_AVG_MINUTES = 22.0
 TRACKER_FILE = "tracked_all_markets.json"
 LIVE_STATS_CACHE_FILE = "live_nba_stats_cache.json"
 RECAP_POSTED_FILE = "daily_recaps_posted.json"
-CACHE_SCHEMA_VERSION = "v13_red_1q_1prop_pra_guard"
+CACHE_SCHEMA_VERSION = "v14_q1_reb_ast_multibook"
 
 SCORE_CHECK_SECONDS = 300     # Checks ESPN scores every 5 mins (FREE)
 FANDUEL_SCAN_SECONDS = 2700   # Rescans FanDuel & Injury Reports every 45 mins until tip-off
@@ -187,7 +195,7 @@ def extract_fanduel_and_consensus(bookmakers_list):
     return fd_markets, other_books
 
 def get_devigged_total_or_prop_consensus(other_books, market_key, pick_dir, fd_line, player_name=None):
-    """Returns (avg_consensus_line, devigged_win_prob_for_pick_dir) across non-FanDuel books."""
+    """Returns (avg_consensus_line, devigged_win_prob_for_pick_dir) across non-target books."""
     pts = []
     devig_probs = []
     target_norm = normalize_name(player_name) if player_name else None
@@ -260,6 +268,7 @@ def extract_q1_player_stats_from_summary(sum_data):
     """
     Parses ESPN's play-by-play ('plays') array for Period 1 to compute exact
     1st Quarter PTS, REB, and AST for every active player in the game.
+    Prioritizes ESPN athlete IDs over play-by-play text to avoid name-abbreviation misses.
     """
     plays = sum_data.get("plays", [])
     p_boxes = sum_data.get("boxscore", {}).get("players", [])
@@ -321,13 +330,21 @@ def extract_q1_player_stats_from_summary(sum_data):
             if scorer_norm in q1_stats:
                 q1_stats[scorer_norm]["PTS"] += pts_val
 
-            if "assists)" in text_lower and "(" in text:
-                inside_paren = text.split("(")[-1].split(")")[0]
-                ast_raw = inside_paren.replace(" assists", "").replace(" Assists", "").strip()
-                assister_norm = normalize_name(ast_raw)
-                if assister_norm not in q1_stats and len(parts) >= 2:
+            if "assist" in text_lower:
+                assister_norm = ""
+                if len(parts) >= 2:
                     ast_id = str(parts[1].get("athlete", {}).get("id", ""))
                     assister_norm = id_to_norm.get(ast_id, "")
+                if not assister_norm and "(" in text:
+                    inside_paren = text.split("(")[-1].split(")")[0]
+                    ast_raw = (
+                        inside_paren.replace(" assists", "")
+                        .replace(" Assists", "")
+                        .replace(" assist", "")
+                        .replace(" Assist", "")
+                        .strip()
+                    )
+                    assister_norm = normalize_name(ast_raw)
                 if assister_norm in q1_stats:
                     q1_stats[assister_norm]["AST"] += 1.0
 
@@ -691,7 +708,7 @@ def sync_live_nba_data():
             cached["fatigue_map"]
         )
 
-    print("🔄 Syncing V13 NBA Engine: Red-Block 1Q, 1-Prop/Player Cap, & Star-Absence PRA Guard...")
+    print("🔄 Syncing V14 NBA Engine: Multi-Book 1Q PTS/REB/AST (7+/10), ID-First PBP, & V13 Guards...")
 
     # 1. Layer Official ESPN Season Averages on top of Fallback Dictionary
     espn_season_stats = fetch_espn_season_averages()
@@ -1073,7 +1090,7 @@ def sync_live_nba_data():
         "fatigue_map": fatigue_map
     })
     starter_cnt = sum(1 for v in player_db.values() if v.get("IS_STARTER"))
-    print(f"✅ Synced {len(player_db)} players ({starter_cnt} verified starters with 1Q L10 logs) & V13 Guards!")
+    print(f"✅ Synced {len(player_db)} players ({starter_cnt} verified starters with 1Q PTS/REB/AST L10 logs)!")
     return team_db, player_db, opp_ranks, pos_ranks, pos_def_mults, fatigue_map
 
 def fetch_injured_players():
@@ -1203,16 +1220,12 @@ def is_spot_starter_under_trap(pick_dir, stat_code, line, szn_avg, l10_avg, szn_
     if pick_dir != "Under":
         return False
     anchor = max(szn_avg, l10_avg, 0.5)
-    # 1. Never bet Under on low-minute players (< 16 MPG)
     if szn_min < MIN_PLAYER_AVG_MINUTES:
         return True
-    # 2. Major Star-Absence Guard (No 29 MPG exemption — protects against Embiid-style traps)
     if missing_team_impact >= 30.0 or missing_team_mins >= 35.0:
         return True
-    # 3. Role-player missing-minutes guard (< 29 MPG)
     if szn_min < 29.0 and (missing_team_mins >= 18.0 or usage_boost_mult >= 1.03 or missing_team_impact >= 20.0):
         return True
-    # 4. Sportsbook inflated-line jump guards
     if line >= (anchor * 1.28):
         return True
     if stat_code == "PRA":
@@ -1268,12 +1281,13 @@ def scan_all_fanduel_markets():
     }
 
     res = requests.get(url, params=params, timeout=10)
-    print(f"📊 V13 Multi-Book Sync for {today_ct_str}! (Credits Remaining: {res.headers.get('x-requests-remaining')})")
+    print(f"📊 V14 Multi-Book Sync for {today_ct_str}! (Credits Remaining: {res.headers.get('x-requests-remaining')})")
     if res.status_code != 200:
         return
 
     events = res.json()
     deep_scans_done = 0
+    q1_offers_seen = {"PTS": 0, "REB": 0, "AST": 0}
 
     for g in events:
         fd_markets, other_books = extract_fanduel_and_consensus(g.get("bookmakers", []))
@@ -1439,7 +1453,7 @@ def scan_all_fanduel_markets():
                                     tracked_bets.append({"bet_key": bet_key, "message_id": msg_id, "away": away, "home": home, "market": "FG_SPREAD", "pick_team": pick_team, "line": pick_line, "juice": juice, "units": units, "base_text": base_text, "status": "PENDING"})
                                     already_posted.add(bet_key)
 
-        # --- B. DEEP SCAN: 1H / 1Q, FULL-GAME PROPS & 1Q STARTER PROPS ---
+        # --- B. DEEP SCAN: 1H / 1Q, FULL-GAME PROPS & MULTI-BOOK 1Q STARTER PROPS ---
         if (SCAN_HALVES_QUARTERS or SCAN_PLAYER_PROPS or SCAN_Q1_PLAYER_PROPS) and (deep_scans_done < MAX_DEEP_SCAN_GAMES_PER_RUN):
             extra_markets = []
             if SCAN_HALVES_QUARTERS:
@@ -1463,8 +1477,8 @@ def scan_all_fanduel_markets():
             if ev_res.status_code == 200:
                 deep_scans_done += 1
                 ev_data = ev_res.json()
-
-                fd_ev_markets, other_ev_books = extract_fanduel_and_consensus(ev_data.get("bookmakers", []))
+                all_ev_books = ev_data.get("bookmakers", [])
+                fd_ev_markets, other_ev_books = extract_fanduel_and_consensus(all_ev_books)
 
                 # Pace-Scaled & Regressed Period Team Projections (Totals)
                 q1_h_pts = (((h_stats["q1_off"] + a_stats["q1_def"]) / 2.0) * pace_scaler) - (h_inj_pen * 0.22)
@@ -1615,7 +1629,7 @@ def scan_all_fanduel_markets():
                             if norm_p in prop_excluded or norm_p not in player_db or "Over" not in sides or "Under" not in sides:
                                 continue
 
-                            # 1 Full-Game Prop Cap Per Player (Blocks multi-prop stacking on same player)
+                            # 1 Full-Game Prop Cap Per Player
                             has_posted_player_fg_prop = any(
                                 f"{match_key}_{norm_p}_{sfx}" in already_posted
                                 for sfx in ["PTS", "REB", "AST", "PRA", "3PM"]
@@ -1685,7 +1699,6 @@ def scan_all_fanduel_markets():
                             pace_mult = exp_pace / avg_pace
                             lambda_proj = base_avg * (0.75 * matchup_mult + 0.25 * pace_mult) * min_weight_mult * usage_boost_mult
 
-                            # Graduated 4Q Blowout Risk Discount on Overs (Starts at 8.5+ Spreads)
                             if lambda_proj > line:
                                 if fg_spread_abs >= 12.0:
                                     lambda_proj *= 0.92
@@ -1706,7 +1719,6 @@ def scan_all_fanduel_markets():
                             else:
                                 pick_dir, stat_win_prob, juice = "Under", prob_under, int(sides["Under"]["price"])
 
-                            # Block Over bets if a player's recent minutes (L3/L5) dropped 15%+ below season average
                             if pick_dir == "Over" and min_ratio <= 0.85 and usage_boost_mult < 1.04:
                                 continue
 
@@ -1754,118 +1766,142 @@ def scan_all_fanduel_markets():
                                 }
                                 player_fg_prop_candidates.setdefault(norm_p, []).append((edge, base_text, payload))
 
-                    # --- D. 1ST QUARTER STARTER PROPS (7+/10 L10 HIT RATE + RED MATCHUP BLOCK) ---
-                    elif m_key in ["player_points_q1", "player_rebounds_q1", "player_assists_q1"]:
-                        q1_stat_map = {
-                            "player_points_q1": "PTS",
-                            "player_rebounds_q1": "REB",
-                            "player_assists_q1": "AST"
-                        }
-                        stat_code = q1_stat_map[m_key]
-                        players_in_q1_market = {}
-                        for o in m["outcomes"]:
-                            p_name = o.get("description", "")
-                            if p_name not in players_in_q1_market:
-                                players_in_q1_market[p_name] = {}
-                            players_in_q1_market[p_name][o["name"]] = o
-
-                        for p_name, sides in players_in_q1_market.items():
-                            norm_p = normalize_name(p_name)
-                            if norm_p in prop_excluded or norm_p not in player_db or "Over" not in sides or "Under" not in sides:
+                # --- D. MULTI-BOOK 1ST QUARTER STARTER PROPS (PTS, REB, AST — 7+/10 L10) ---
+                # Checks FanDuel first (including one-way Overs), then falls back to DK/MGM/CZR/ESPN/BR
+                if SCAN_Q1_PLAYER_PROPS:
+                    q1_stat_map = {
+                        "player_points_q1": "PTS",
+                        "player_rebounds_q1": "REB",
+                        "player_assists_q1": "AST"
+                    }
+                    # Structure: q1_board[(m_key, norm_p)] = {"name": p_name, "offers": {(book_key, line): {"Over": price, "Under": price}}}
+                    q1_board = {}
+                    for b in all_ev_books:
+                        b_key = b.get("key", "")
+                        for m in b.get("markets", []):
+                            m_key = m.get("key", "")
+                            if m_key not in q1_stat_map:
                                 continue
-
-                            p_info = player_db[norm_p]
-                            if not p_info.get("IS_STARTER", False):
-                                continue
-
-                            p_team = normalize_team_name(p_info.get("TEAM", ""))
-                            if p_team not in [home, away]:
-                                continue
-
-                            bet_key = f"{match_key}_{norm_p}_Q1_{stat_code}"
-                            if bet_key in already_posted:
-                                continue
-
-                            q1_logs = p_info.get(f"Q1_{stat_code}_L10", [])[-10:]
-                            if len(q1_logs) < MIN_Q1_L10_HITS:
-                                continue
-
-                            line = float(sides["Over"]["point"])
-                            over_hits = sum(1 for v in q1_logs if v > line)
-                            under_hits = sum(1 for v in q1_logs if v < line)
-
-                            if over_hits >= MIN_Q1_L10_HITS:
-                                pick_dir = "Over"
-                                hits = over_hits
-                                juice = int(sides["Over"]["price"])
-                            elif under_hits >= MIN_Q1_L10_HITS:
-                                pick_dir = "Under"
-                                hits = under_hits
-                                juice = int(sides["Under"]["price"])
-                            else:
-                                continue
-
-                            if juice < MAX_Q1_PROP_JUICE:
-                                continue
-
-                            p_pos = p_info.get("POS", "G")
-                            usage_boost_mult, missing_team_impact, missing_team_mins = calc_teammate_usage_boost(norm_p, p_team, p_pos, stat_code, player_db, confirmed_out, questionable_gtd)
-
-                            # Protect 1Q Unders if key rotation teammates are Out/GTD
-                            if pick_dir == "Under" and (usage_boost_mult >= 1.05 or missing_team_mins >= 22.0 or missing_team_impact >= 25.0):
-                                continue
-
-                            mkt_cons, mkt_prob = get_devigged_total_or_prop_consensus(other_ev_books, m_key, pick_dir, line, p_name)
-                            if mkt_cons is not None:
-                                if (pick_dir == "Over" and (mkt_cons - line) <= -1.0) or (pick_dir == "Under" and (mkt_cons - line) >= 1.0):
+                            stat_code = q1_stat_map[m_key]
+                            for o in m.get("outcomes", []):
+                                p_name = o.get("description", "")
+                                side_name = o.get("name", "")
+                                if not p_name or side_name not in ["Over", "Under"] or "point" not in o:
                                     continue
+                                norm_p = normalize_name(p_name)
+                                line_val = float(o["point"])
+                                price_val = int(o["price"])
+                                entry = q1_board.setdefault((m_key, norm_p), {"name": p_name, "offers": {}})
+                                entry["offers"].setdefault((b_key, line_val), {})[side_name] = price_val
+                                q1_offers_seen[stat_code] += 1
 
-                            if p_team == home:
-                                opp_team_name, opp_r, opp_ab_str = away, a_ranks, a_ab
-                            else:
-                                opp_team_name, opp_r, opp_ab_str = home, h_ranks, h_ab
+                    for (m_key, norm_p), entry in q1_board.items():
+                        stat_code = q1_stat_map[m_key]
+                        p_name = entry["name"]
+                        if norm_p in prop_excluded or norm_p not in player_db:
+                            continue
 
-                            opp_def_rk = opp_r[stat_code]
-                            emp_pos_rk = pos_ranks.get(opp_team_name, {}).get(p_pos, {}).get(stat_code, opp_def_rk)
-                            blended_def_rk = int(round(0.50 * opp_def_rk + 0.50 * emp_pos_rk))
-                            dot = get_matchup_dot(blended_def_rk, pick_dir)
+                        p_info = player_db[norm_p]
+                        if not p_info.get("IS_STARTER", False):
+                            continue
 
-                            # V13 Filter: Block Red Matchups on 1Q Starter Props
-                            if dot == "🔴":
-                                continue
+                        p_team = normalize_team_name(p_info.get("TEAM", ""))
+                        if p_team not in [home, away]:
+                            continue
 
-                            n_games = len(q1_logs)
-                            hit_rate = hits / float(n_games)
-                            q1_avg = float(np.mean(q1_logs))
-                            est_win_prob = (0.75 * hit_rate + 0.25 * mkt_prob) if mkt_prob is not None else (0.85 * hit_rate)
-                            units = calc_kelly_units(est_win_prob, juice)
-                            usage_tag = " ⚡+Usage" if (usage_boost_mult >= 1.04 and pick_dir == "Over") else ""
+                        bet_key = f"{match_key}_{norm_p}_Q1_{stat_code}"
+                        if bet_key in already_posted:
+                            continue
 
-                            base_text = (
-                                f"**{p_name} — 1Q {pick_dir} {line} {stat_code}** `({juice:+d})`\n"
-                                f"🎯 **L{n_games} Hit Rate: {hits}/{n_games} ({hit_rate*100:.0f}%)** `({units:.1f}u)`  •  📊 1Q Avg: **{q1_avg:.1f}**\n"
-                                f"{dot} vs {opp_ab_str} Def: **#{opp_def_rk}** *({p_pos}: #{emp_pos_rk})*{usage_tag}  •  🏀 {a_ab}@{h_ab} *({time_short})*\n"
-                                f"{DIVIDER}"
-                            )
-                            msg_id = post_alert_to_discord(base_text)
-                            if msg_id:
-                                tracked_bets.append({
-                                    "bet_key": bet_key,
-                                    "message_id": msg_id,
-                                    "away": away,
-                                    "home": home,
-                                    "market": "PLAYER_PROP_Q1",
-                                    "player": p_name,
-                                    "stat": stat_code,
-                                    "line": line,
-                                    "pick_dir": pick_dir,
-                                    "juice": juice,
-                                    "units": units,
-                                    "dot": dot,
-                                    "base_text": base_text,
-                                    "status": "PENDING"
-                                })
-                                already_posted.add(bet_key)
+                        q1_logs = p_info.get(f"Q1_{stat_code}_L10", [])[-10:]
+                        if len(q1_logs) < MIN_Q1_L10_HITS:
+                            continue
+
+                        p_pos = p_info.get("POS", "G")
+                        usage_boost_mult, missing_team_impact, missing_team_mins = calc_teammate_usage_boost(
+                            norm_p, p_team, p_pos, stat_code, player_db, confirmed_out, questionable_gtd
+                        )
+
+                        if p_team == home:
+                            opp_team_name, opp_r, opp_ab_str = away, a_ranks, a_ab
+                        else:
+                            opp_team_name, opp_r, opp_ab_str = home, h_ranks, h_ab
+
+                        opp_def_rk = opp_r[stat_code]
+                        emp_pos_rk = pos_ranks.get(opp_team_name, {}).get(p_pos, {}).get(stat_code, opp_def_rk)
+                        blended_def_rk = int(round(0.50 * opp_def_rk + 0.50 * emp_pos_rk))
+
+                        qualifying_q1 = []
+                        for (b_key, line), sides in entry["offers"].items():
+                            # Evaluate Over if posted
+                            if "Over" in sides:
+                                over_hits = sum(1 for v in q1_logs if v > line)
+                                juice = sides["Over"]
+                                if over_hits >= MIN_Q1_L10_HITS and juice >= MAX_Q1_PROP_JUICE:
+                                    dot = get_matchup_dot(blended_def_rk, "Over")
+                                    if dot != "🔴":
+                                        comp_books = [bk for bk in all_ev_books if bk.get("key") != b_key]
+                                        mkt_cons, mkt_prob = get_devigged_total_or_prop_consensus(comp_books, m_key, "Over", line, p_name)
+                                        if mkt_cons is None or (mkt_cons - line) > -1.0:
+                                            is_fd = 1 if b_key == "fanduel" else 0
+                                            qualifying_q1.append((is_fd, over_hits, juice, b_key, line, "Over", dot, mkt_prob))
+
+                            # Evaluate Under if posted
+                            if "Under" in sides:
+                                under_hits = sum(1 for v in q1_logs if v < line)
+                                juice = sides["Under"]
+                                if under_hits >= MIN_Q1_L10_HITS and juice >= MAX_Q1_PROP_JUICE:
+                                    if not (usage_boost_mult >= 1.05 or missing_team_mins >= 22.0 or missing_team_impact >= 25.0):
+                                        dot = get_matchup_dot(blended_def_rk, "Under")
+                                        if dot != "🔴":
+                                            comp_books = [bk for bk in all_ev_books if bk.get("key") != b_key]
+                                            mkt_cons, mkt_prob = get_devigged_total_or_prop_consensus(comp_books, m_key, "Under", line, p_name)
+                                            if mkt_cons is None or (mkt_cons - line) < 1.0:
+                                                is_fd = 1 if b_key == "fanduel" else 0
+                                                qualifying_q1.append((is_fd, under_hits, juice, b_key, line, "Under", dot, mkt_prob))
+
+                        if not qualifying_q1:
+                            continue
+
+                        # Prioritize FanDuel first, then highest L10 hits, then best American odds
+                        _, hits, juice, best_book, line, pick_dir, dot, mkt_prob = max(
+                            qualifying_q1, key=lambda x: (x[0], x[1], x[2])
+                        )
+
+                        n_games = len(q1_logs)
+                        hit_rate = hits / float(n_games)
+                        q1_avg = float(np.mean(q1_logs))
+                        est_win_prob = (0.75 * hit_rate + 0.25 * mkt_prob) if mkt_prob is not None else (0.85 * hit_rate)
+                        units = calc_kelly_units(est_win_prob, juice)
+                        usage_tag = " ⚡+Usage" if (usage_boost_mult >= 1.04 and pick_dir == "Over") else ""
+                        book_tag = "" if best_book == "fanduel" else f" • {BOOK_LABELS.get(best_book, best_book.upper())}"
+
+                        base_text = (
+                            f"**{p_name} — 1Q {pick_dir} {line} {stat_code}** `({juice:+d}{book_tag})`\n"
+                            f"🎯 **L{n_games} Hit Rate: {hits}/{n_games} ({hit_rate*100:.0f}%)** `({units:.1f}u)`  •  📊 1Q Avg: **{q1_avg:.1f}**\n"
+                            f"{dot} vs {opp_ab_str} Def: **#{opp_def_rk}** *({p_pos}: #{emp_pos_rk})*{usage_tag}  •  🏀 {a_ab}@{h_ab} *({time_short})*\n"
+                            f"{DIVIDER}"
+                        )
+                        msg_id = post_alert_to_discord(base_text)
+                        if msg_id:
+                            tracked_bets.append({
+                                "bet_key": bet_key,
+                                "message_id": msg_id,
+                                "away": away,
+                                "home": home,
+                                "market": "PLAYER_PROP_Q1",
+                                "player": p_name,
+                                "stat": stat_code,
+                                "line": line,
+                                "pick_dir": pick_dir,
+                                "juice": juice,
+                                "units": units,
+                                "dot": dot,
+                                "book": best_book,
+                                "base_text": base_text,
+                                "status": "PENDING"
+                            })
+                            already_posted.add(bet_key)
 
                 # --- POST SINGLE HIGHEST-EV FULL-GAME PROP PER PLAYER ---
                 for norm_p, cand_list in player_fg_prop_candidates.items():
@@ -1885,6 +1921,7 @@ def scan_all_fanduel_markets():
                 tracked_bets.append(best_payload)
                 already_posted.add(best_payload["bet_key"])
 
+    print(f"🎯 1Q Prop Offers Scanned Across All Books — PTS: {q1_offers_seen['PTS']} | REB: {q1_offers_seen['REB']} | AST: {q1_offers_seen['AST']}")
     save_json(TRACKER_FILE, tracked_bets)
 
 def post_daily_recaps_if_complete(tracked_bets):
@@ -2044,52 +2081,61 @@ def check_scores_and_grade_all_markets():
             ):
                 continue
 
-            did_win = None
+            outcome = None
             mkt = bet["market"]
 
             if mkt == "TOTALS_Q1" and (period > 1 or is_final) and len(h_lines) >= 1 and len(a_lines) >= 1:
                 q1_tot = h_lines[0] + a_lines[0]
-                did_win = (q1_tot > bet["line"]) if bet["pick_dir"] == "Over" else (q1_tot < bet["line"])
-            elif mkt == "SPREADS_Q1" and (period > 1 or is_final) and len(h_lines) >= 1 and len(a_lines) >= 1:
-                if bet["pick_team"] == h_name:
-                    did_win = (h_lines[0] + bet["line"]) > a_lines[0]
+                if q1_tot == bet["line"]:
+                    outcome = "PUSH"
                 else:
-                    did_win = (a_lines[0] + bet["line"]) > h_lines[0]
+                    outcome = "WIN" if ((q1_tot > bet["line"]) if bet["pick_dir"] == "Over" else (q1_tot < bet["line"])) else "LOSS"
+            elif mkt == "SPREADS_Q1" and (period > 1 or is_final) and len(h_lines) >= 1 and len(a_lines) >= 1:
+                margin = (h_lines[0] + bet["line"] - a_lines[0]) if bet["pick_team"] == h_name else (a_lines[0] + bet["line"] - h_lines[0])
+                outcome = "PUSH" if margin == 0 else ("WIN" if margin > 0 else "LOSS")
             elif mkt == "TOTALS_H1" and (period > 2 or is_final) and len(h_lines) >= 2 and len(a_lines) >= 2:
                 h1_tot = sum(h_lines[:2]) + sum(a_lines[:2])
-                did_win = (h1_tot > bet["line"]) if bet["pick_dir"] == "Over" else (h1_tot < bet["line"])
+                if h1_tot == bet["line"]:
+                    outcome = "PUSH"
+                else:
+                    outcome = "WIN" if ((h1_tot > bet["line"]) if bet["pick_dir"] == "Over" else (h1_tot < bet["line"])) else "LOSS"
             elif mkt == "SPREADS_H1" and (period > 2 or is_final) and len(h_lines) >= 2 and len(a_lines) >= 2:
                 h1_h = sum(h_lines[:2])
                 h1_a = sum(a_lines[:2])
-                if bet["pick_team"] == h_name:
-                    did_win = (h1_h + bet["line"]) > h1_a
-                else:
-                    did_win = (h1_a + bet["line"]) > h1_h
+                margin = (h1_h + bet["line"] - h1_a) if bet["pick_team"] == h_name else (h1_a + bet["line"] - h1_h)
+                outcome = "PUSH" if margin == 0 else ("WIN" if margin > 0 else "LOSS")
             elif mkt == "FG_TOTAL" and is_final:
                 fg_tot = h_pts + a_pts
-                did_win = (fg_tot > bet["line"]) if bet["pick_dir"] == "Over" else (fg_tot < bet["line"])
-            elif mkt == "FG_SPREAD" and is_final:
-                if bet["pick_team"] == h_name:
-                    did_win = (h_pts + bet["line"]) > a_pts
+                if fg_tot == bet["line"]:
+                    outcome = "PUSH"
                 else:
-                    did_win = (a_pts + bet["line"]) > h_pts
+                    outcome = "WIN" if ((fg_tot > bet["line"]) if bet["pick_dir"] == "Over" else (fg_tot < bet["line"])) else "LOSS"
+            elif mkt == "FG_SPREAD" and is_final:
+                margin = (h_pts + bet["line"] - a_pts) if bet["pick_team"] == h_name else (a_pts + bet["line"] - h_pts)
+                outcome = "PUSH" if margin == 0 else ("WIN" if margin > 0 else "LOSS")
             elif mkt == "PLAYER_PROP" and is_final:
                 norm_bet_p = normalize_name(bet["player"])
                 if norm_bet_p in player_stats_map:
                     actual_stat = player_stats_map[norm_bet_p].get(bet["stat"], 0.0)
-                    did_win = (actual_stat > bet["line"]) if bet["pick_dir"] == "Over" else (actual_stat < bet["line"])
+                    if actual_stat == bet["line"]:
+                        outcome = "PUSH"
+                    else:
+                        outcome = "WIN" if ((actual_stat > bet["line"]) if bet["pick_dir"] == "Over" else (actual_stat < bet["line"])) else "LOSS"
             elif mkt == "PLAYER_PROP_Q1" and (period > 1 or is_final):
                 norm_bet_p = normalize_name(bet["player"])
                 if norm_bet_p in q1_player_stats_map:
                     actual_q1_stat = q1_player_stats_map[norm_bet_p].get(bet["stat"], 0.0)
-                    did_win = (actual_q1_stat > bet["line"]) if bet["pick_dir"] == "Over" else (actual_q1_stat < bet["line"])
+                    if actual_q1_stat == bet["line"]:
+                        outcome = "PUSH"
+                    else:
+                        outcome = "WIN" if ((actual_q1_stat > bet["line"]) if bet["pick_dir"] == "Over" else (actual_q1_stat < bet["line"])) else "LOSS"
 
-            if did_win is not None and DISCORD_WEBHOOK_URL:
-                icon = "✅" if did_win else "❌"
+            if outcome is not None and DISCORD_WEBHOOK_URL:
+                icon = "✅" if outcome == "WIN" else ("➖" if outcome == "PUSH" else "❌")
                 patch_res = requests.patch(f"{DISCORD_WEBHOOK_URL}/messages/{bet['message_id']}", json={"content": f"{icon} {bet['base_text']}"})
                 if patch_res.status_code == 200:
                     bet["status"] = "GRADED"
-                    bet["result"] = "WIN" if did_win else "LOSS"
+                    bet["result"] = outcome
                     updated = True
 
     if updated:
@@ -2098,12 +2144,12 @@ def check_scores_and_grade_all_markets():
 
 if __name__ == "__main__":
     if "--grade-only" in sys.argv:
-        print("🏁 Running V13 Overnight Grading & Daily Recap Check...")
+        print("🏁 Running V14 Overnight Grading & Daily Recap Check...")
         check_scores_and_grade_all_markets()
         print("✅ Grading pass complete.")
         sys.exit(0)
 
-    print("🤖 LIVE NBA EV BOT (V13: RED-1Q BLOCK + 1-PROP/PLAYER CAP + PRA GUARD) IS LIVE!")
+    print("🤖 LIVE NBA EV BOT (V14: MULTI-BOOK 1Q PTS/REB/AST + V13 GUARDS) IS LIVE!")
     start_ts = time.time()
     last_scan = 0
     while (time.time() - start_ts) < MAX_RUNTIME_SECONDS:

@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 import pytz
 
 # ==========================================
-# 1. CREDENTIALS & 20K PLAN CONFIGURATION
+# 1. CREDENTIALS & V15 SNIPER CONFIGURATION
 # ==========================================
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
 
@@ -22,47 +22,63 @@ THE_ODDS_API_KEY = (
     else _env_odds_key
 )
 
-# Market Toggles (All Unlocked for 20K Plan)
+# Market Toggles
 SCAN_FULL_GAME = True         # Full-Game Spreads & Totals
 SCAN_HALVES_QUARTERS = True   # 1st Half & 1st Quarter Spreads & Totals
-SCAN_PLAYER_PROPS = True      # Starters & Role Players: PTS, REB, AST
-SCAN_PRA_AND_3PM = True       # Unlocked: Scans PRA & 3PM on every game
-SCAN_Q1_PLAYER_PROPS = True   # 1st Quarter Starter Props: PTS, REB, AST (7+/10 L10 Filter)
+SCAN_PLAYER_PROPS = True      # Core Starters Only: PTS, REB, AST, PRA, 3PM (7/10 L10 Sniper)
+SCAN_PRA_AND_3PM = True       # Scans PRA & 3PM alongside PTS/REB/AST
+SCAN_Q1_PLAYER_PROPS = True   # 1st Quarter Starter Props: PTS, REB, AST (7/10 L10 Filter)
 
-# Separate Minimum EV & Hit-Rate Filters
+# Calibrated EV, Hit-Rate, Juice & Volume Controls
 MIN_EDGE_TEAM_MARKETS = 0.110 # 11.0% Minimum EV for Full-Game & 1Q/1H Spreads and Totals
-MIN_EDGE_PLAYER_PROPS = 0.150 # 15.0% Minimum EV for Full-Game Player Props
+MIN_EDGE_PLAYER_PROPS = 0.080 # 8.0% Calibrated EV (60/40 Pinnacle blend + widened std dev + 7/10 L10 gate)
+MIN_FG_PROP_L10_HITS = 7      # Requires >= 7 hits in Last 10 games for Full-Game Props
 MIN_Q1_L10_HITS = 7           # Requires >= 7 hits in Last 10 games for 1Q Starter Props
-MAX_Q1_PROP_JUICE = -165      # Blocks heavily juiced unplayable 1Q lines (e.g. -210, -550)
+MAX_FG_PROP_JUICE = -140      # Blocks heavily juiced FG props (e.g., -146)
+MAX_Q1_PROP_JUICE = -165      # Blocks heavily juiced 1Q props (e.g., -210, -550)
+MAX_FG_PROPS_PER_DAY = 5      # Caps daily slate to top 5 highest-EV FG sniper props
+MAX_FG_PROP_UNITS = 1.0       # Caps FG prop Kelly sizing at 1.0u max
 
-# Up to 10 US bookmakers cost the exact same 1-region credit in The Odds API
-BOOKMAKERS_LIST = "fanduel,draftkings,betmgm,caesars,espnbet,betrivers"
+# 10 Valid Bookmakers across US / US2 / EU = exactly 1 region credit in The Odds API
+# (Do NOT pass 'regions' param when specifying cross-region 'bookmakers')
+BOOKMAKERS_LIST = (
+    "fanduel,draftkings,betmgm,williamhill_us,fanatics,"
+    "espnbet,betrivers,hardrockbet,bovada,pinnacle"
+)
+PLAYABLE_US_BOOKS = {
+    "fanduel", "draftkings", "betmgm", "williamhill_us",
+    "fanatics", "espnbet", "betrivers", "hardrockbet", "bovada"
+}
 BOOK_LABELS = {
     "fanduel": "FD",
     "draftkings": "DK",
     "betmgm": "MGM",
-    "caesars": "CZR",
+    "williamhill_us": "CZR",
+    "fanatics": "FAN",
     "espnbet": "ESPN",
-    "betrivers": "BR"
+    "betrivers": "BR",
+    "hardrockbet": "HR",
+    "bovada": "BOV",
+    "pinnacle": "PIN"
 }
 
 MAX_DEEP_SCAN_GAMES_PER_RUN = 15 # Scans full slate (up to 15 games) per pass
 LOOKBACK_DAYS_FOR_STATS = 30     # 30-day window ensures full 10-game (L10) logs for starters
 
-# Minimum Prop Line & Minutes Filters (Avoids micro-line & deep-bench traps)
+# Minimum Prop Line & Minutes Filters
 MIN_PROP_LINE_PTS = 7.5
 MIN_PROP_LINE_OTHER = 3.5
 MIN_PROP_LINE_3PM = 1.5
-MIN_PLAYER_AVG_MINUTES = 16.0
-MIN_STARTER_AVG_MINUTES = 22.0
+MIN_FG_PROP_AVG_MINUTES = 24.0   # Core 24+ MPG starters only for Full-Game props
+MIN_STARTER_AVG_MINUTES = 22.0   # Verified starter threshold for 1Q props
 
 TRACKER_FILE = "tracked_all_markets.json"
 LIVE_STATS_CACHE_FILE = "live_nba_stats_cache.json"
 RECAP_POSTED_FILE = "daily_recaps_posted.json"
-CACHE_SCHEMA_VERSION = "v14_q1_reb_ast_multibook"
+CACHE_SCHEMA_VERSION = "v15_sniper_7of10_pinnacle_10books"
 
 SCORE_CHECK_SECONDS = 300     # Checks ESPN scores every 5 mins (FREE)
-FANDUEL_SCAN_SECONDS = 2700   # Rescans FanDuel & Injury Reports every 45 mins until tip-off
+FANDUEL_SCAN_SECONDS = 2700   # Rescans lines & injury reports every 45 mins until tip-off
 MAX_RUNTIME_SECONDS = 19800   # Clean exit at 5h 30m so GitHub Actions commits JSON state before 6h kill
 
 NBA_STD_DEV_TOTAL = 16.0
@@ -145,6 +161,18 @@ def normalize_team_name(name):
             return full_name
     return raw
 
+def parse_minutes(val):
+    if val is None:
+        return 0.0
+    try:
+        s = str(val).strip()
+        if ":" in s:
+            parts = s.split(":")
+            return float(parts[0]) + (float(parts[1]) / 60.0)
+        return float(s)
+    except:
+        return 0.0
+
 def load_json(filename, default_val):
     if os.path.exists(filename):
         try:
@@ -172,16 +200,16 @@ def profit_per_unit(odds_val):
     except:
         return 0.9091
 
-def calc_kelly_units(win_prob, odds_val):
-    """Calculates Quarter-Kelly unit recommendation bounded between 0.5u and 2.0u."""
+def calc_kelly_units(win_prob, odds_val, max_units=2.0):
+    """Calculates Quarter-Kelly unit recommendation bounded between 0.5u and max_units."""
     try:
         b = profit_per_unit(odds_val)
         q = 1.0 - win_prob
         kelly_f = max(0.0, (b * win_prob - q) / b)
         units = round(kelly_f * 0.25 * 20.0, 1)
-        return max(0.5, min(2.0, units))
+        return max(0.5, min(max_units, units))
     except:
-        return 1.0
+        return min(1.0, max_units)
 
 def extract_fanduel_and_consensus(bookmakers_list):
     """Separates FanDuel markets from other major books to build de-vigged consensus."""
@@ -195,12 +223,18 @@ def extract_fanduel_and_consensus(bookmakers_list):
     return fd_markets, other_books
 
 def get_devigged_total_or_prop_consensus(other_books, market_key, pick_dir, fd_line, player_name=None):
-    """Returns (avg_consensus_line, devigged_win_prob_for_pick_dir) across non-target books."""
+    """
+    Returns (weighted_consensus_line, weighted_devigged_win_prob) across comparison books.
+    Gives Pinnacle 2.0x sharp weight when available.
+    """
     pts = []
+    pts_w = []
     devig_probs = []
+    probs_w = []
     target_norm = normalize_name(player_name) if player_name else None
 
     for b in other_books:
+        b_weight = 2.0 if b.get("key") == "pinnacle" else 1.0
         for m in b.get("markets", []):
             if m.get("key") != market_key:
                 continue
@@ -216,6 +250,7 @@ def get_devigged_total_or_prop_consensus(other_books, market_key, pick_dir, fd_l
             if over_o and under_o:
                 b_line = float(over_o["point"])
                 pts.append(b_line)
+                pts_w.append(b_weight)
                 p_over_raw = american_to_implied_prob(over_o["price"])
                 p_under_raw = american_to_implied_prob(under_o["price"])
                 tot_vig = p_over_raw + p_under_raw
@@ -226,16 +261,23 @@ def get_devigged_total_or_prop_consensus(other_books, market_key, pick_dir, fd_l
                     if abs(line_diff) <= 1.5:
                         adj = (line_diff * 0.035) if pick_dir == "Over" else (-line_diff * 0.035)
                         devig_probs.append(float(np.clip(fair_pick + adj, 0.05, 0.95)))
+                        probs_w.append(b_weight)
 
-    avg_line = round(float(np.mean(pts)), 1) if pts else None
-    avg_prob = float(np.mean(devig_probs)) if devig_probs else None
+    avg_line = round(float(np.average(pts, weights=pts_w)), 1) if pts else None
+    avg_prob = float(np.average(devig_probs, weights=probs_w)) if devig_probs else None
     return avg_line, avg_prob
 
 def get_devigged_spread_consensus(other_books, market_key, pick_team, fd_line):
-    """Returns (avg_consensus_spread, devigged_win_prob_for_pick_team) across non-FanDuel books."""
+    """
+    Returns (weighted_consensus_spread, weighted_devigged_win_prob) across comparison books.
+    Gives Pinnacle 2.0x sharp weight when available.
+    """
     pts = []
+    pts_w = []
     devig_probs = []
+    probs_w = []
     for b in other_books:
+        b_weight = 2.0 if b.get("key") == "pinnacle" else 1.0
         for m in b.get("markets", []):
             if m.get("key") != market_key:
                 continue
@@ -251,6 +293,7 @@ def get_devigged_spread_consensus(other_books, market_key, pick_team, fd_line):
             if pick_o and opp_o:
                 b_line = float(pick_o["point"])
                 pts.append(b_line)
+                pts_w.append(b_weight)
                 p_pick = american_to_implied_prob(pick_o["price"])
                 p_opp = american_to_implied_prob(opp_o["price"])
                 tot_vig = p_pick + p_opp
@@ -259,9 +302,10 @@ def get_devigged_spread_consensus(other_books, market_key, pick_team, fd_line):
                     line_diff = fd_line - b_line
                     if abs(line_diff) <= 1.5:
                         devig_probs.append(float(np.clip(fair_pick + (line_diff * 0.03), 0.05, 0.95)))
+                        probs_w.append(b_weight)
 
-    avg_line = round(float(np.mean(pts)), 1) if pts else None
-    avg_prob = float(np.mean(devig_probs)) if devig_probs else None
+    avg_line = round(float(np.average(pts, weights=pts_w)), 1) if pts else None
+    avg_prob = float(np.average(devig_probs, weights=probs_w)) if devig_probs else None
     return avg_line, avg_prob
 
 def extract_q1_player_stats_from_summary(sum_data):
@@ -287,8 +331,7 @@ def extract_q1_player_stats_from_summary(sum_data):
                 continue
             s_vals = ath.get("stats", [])
             if min_idx != -1 and s_vals:
-                min_raw = str(s_vals[min_idx]).split(":")[0]
-                mins = float(min_raw) if min_raw.isdigit() else 0.0
+                mins = parse_minutes(s_vals[min_idx])
                 if mins <= 0.0:
                     continue
             ath_obj = ath.get("athlete", {})
@@ -406,201 +449,58 @@ def get_team_efficiency_baselines():
 
 def get_fallback_player_baselines():
     raw_baselines = {
-        "Jayson Tatum": {"PTS": 28.4, "REB": 8.5, "AST": 5.4, "POS": "F", "TEAM": "Boston Celtics"},
+        "Jayson Tatum": {"PTS": 26.4, "REB": 8.5, "AST": 6.8, "POS": "F", "TEAM": "Boston Celtics"},
         "Jaylen Brown": {"PTS": 22.6, "REB": 6.6, "AST": 4.0, "POS": "G", "TEAM": "Philadelphia 76ers"},
         "Derrick White": {"PTS": 16.8, "REB": 4.3, "AST": 5.1, "POS": "G", "TEAM": "Boston Celtics"},
         "Jrue Holiday": {"PTS": 12.8, "REB": 4.8, "AST": 4.6, "POS": "G", "TEAM": "Boston Celtics"},
         "Kristaps Porzingis": {"PTS": 19.5, "REB": 7.1, "AST": 2.0, "POS": "C", "TEAM": "Boston Celtics"},
         "Payton Pritchard": {"PTS": 13.4, "REB": 3.2, "AST": 3.8, "POS": "G", "TEAM": "Boston Celtics"},
         "Al Horford": {"PTS": 8.6, "REB": 6.2, "AST": 2.6, "POS": "C", "TEAM": "Boston Celtics"},
-        "Jalen Brunson": {"PTS": 27.9, "REB": 3.6, "AST": 6.8, "POS": "G", "TEAM": "New York Knicks"},
-        "Karl-Anthony Towns": {"PTS": 24.5, "REB": 11.8, "AST": 3.1, "POS": "C", "TEAM": "New York Knicks"},
+        "Jalen Brunson": {"PTS": 26.6, "REB": 3.6, "AST": 6.8, "POS": "G", "TEAM": "New York Knicks"},
+        "Karl-Anthony Towns": {"PTS": 24.5, "REB": 13.9, "AST": 3.1, "POS": "C", "TEAM": "New York Knicks"},
         "Mikal Bridges": {"PTS": 17.8, "REB": 3.9, "AST": 3.4, "POS": "F", "TEAM": "New York Knicks"},
         "OG Anunoby": {"PTS": 16.4, "REB": 5.1, "AST": 2.2, "POS": "F", "TEAM": "New York Knicks"},
-        "Josh Hart": {"PTS": 13.2, "REB": 8.6, "AST": 5.2, "POS": "G", "TEAM": "New York Knicks"},
-        "Miles McBride": {"PTS": 10.4, "REB": 2.1, "AST": 2.4, "POS": "G", "TEAM": "New York Knicks"},
-        "Shai Gilgeous-Alexander": {"PTS": 31.2, "REB": 5.6, "AST": 6.4, "POS": "G", "TEAM": "Oklahoma City Thunder"},
+        "Josh Hart": {"PTS": 6.5, "REB": 8.6, "AST": 5.2, "POS": "G", "TEAM": "New York Knicks"},
+        "Shai Gilgeous-Alexander": {"PTS": 31.7, "REB": 5.6, "AST": 6.4, "POS": "G", "TEAM": "Oklahoma City Thunder"},
         "Jalen Williams": {"PTS": 21.4, "REB": 5.4, "AST": 5.1, "POS": "F", "TEAM": "Oklahoma City Thunder"},
         "Chet Holmgren": {"PTS": 18.2, "REB": 8.8, "AST": 2.6, "POS": "C", "TEAM": "Oklahoma City Thunder"},
-        "Lu Dort": {"PTS": 10.8, "REB": 3.8, "AST": 1.6, "POS": "G", "TEAM": "Oklahoma City Thunder"},
         "Isaiah Hartenstein": {"PTS": 11.4, "REB": 10.8, "AST": 3.6, "POS": "C", "TEAM": "Oklahoma City Thunder"},
-        "Alex Caruso": {"PTS": 7.8, "REB": 3.2, "AST": 2.8, "POS": "G", "TEAM": "Oklahoma City Thunder"},
-        "Cason Wallace": {"PTS": 8.4, "REB": 2.8, "AST": 2.1, "POS": "G", "TEAM": "Oklahoma City Thunder"},
-        "Aaron Wiggins": {"PTS": 9.8, "REB": 3.4, "AST": 1.5, "POS": "G", "TEAM": "Oklahoma City Thunder"},
         "Damian Lillard": {"PTS": 20.4, "REB": 3.8, "AST": 4.9, "POS": "G", "TEAM": "Portland Trail Blazers"},
-        "Anfernee Simons": {"PTS": 19.6, "REB": 3.1, "AST": 4.8, "POS": "G", "TEAM": "Portland Trail Blazers"},
-        "Jerami Grant": {"PTS": 18.4, "REB": 4.1, "AST": 2.4, "POS": "F", "TEAM": "Portland Trail Blazers"},
-        "Deandre Ayton": {"PTS": 14.8, "REB": 10.4, "AST": 1.6, "POS": "C", "TEAM": "Portland Trail Blazers"},
-        "Scoot Henderson": {"PTS": 13.6, "REB": 3.2, "AST": 5.4, "POS": "G", "TEAM": "Portland Trail Blazers"},
-        "Shaedon Sharpe": {"PTS": 16.2, "REB": 4.4, "AST": 2.6, "POS": "G", "TEAM": "Portland Trail Blazers"},
-        "Deni Avdija": {"PTS": 13.8, "REB": 6.6, "AST": 3.6, "POS": "F", "TEAM": "Portland Trail Blazers"},
-        "Toumani Camara": {"PTS": 9.6, "REB": 5.8, "AST": 1.8, "POS": "F", "TEAM": "Portland Trail Blazers"},
-        "Donovan Clingan": {"PTS": 7.8, "REB": 7.4, "AST": 1.2, "POS": "C", "TEAM": "Portland Trail Blazers"},
+        "Donovan Clingan": {"PTS": 7.8, "REB": 10.7, "AST": 1.2, "POS": "C", "TEAM": "Portland Trail Blazers"},
         "Stephen Curry": {"PTS": 26.4, "REB": 4.5, "AST": 5.2, "POS": "G", "TEAM": "Golden State Warriors"},
-        "Draymond Green": {"PTS": 8.8, "REB": 6.8, "AST": 6.2, "POS": "F", "TEAM": "Golden State Warriors"},
-        "Andrew Wiggins": {"PTS": 16.4, "REB": 4.8, "AST": 2.1, "POS": "F", "TEAM": "Miami Heat"},
-        "Jonathan Kuminga": {"PTS": 15.8, "REB": 4.6, "AST": 2.2, "POS": "F", "TEAM": "Golden State Warriors"},
-        "Buddy Hield": {"PTS": 14.6, "REB": 3.4, "AST": 2.1, "POS": "G", "TEAM": "Golden State Warriors"},
-        "Brandin Podziemski": {"PTS": 10.2, "REB": 5.1, "AST": 4.2, "POS": "G", "TEAM": "Golden State Warriors"},
-        "Trayce Jackson-Davis": {"PTS": 8.9, "REB": 6.4, "AST": 1.8, "POS": "C", "TEAM": "Golden State Warriors"},
         "Jimmy Butler": {"PTS": 18.8, "REB": 5.4, "AST": 4.8, "POS": "F", "TEAM": "Golden State Warriors"},
         "Kevin Durant": {"PTS": 27.4, "REB": 6.6, "AST": 4.8, "POS": "F", "TEAM": "Houston Rockets"},
-        "Alperen Sengun": {"PTS": 21.6, "REB": 11.2, "AST": 5.1, "POS": "C", "TEAM": "Houston Rockets"},
-        "Jalen Green": {"PTS": 22.4, "REB": 4.8, "AST": 3.4, "POS": "G", "TEAM": "Houston Rockets"},
-        "Fred VanVleet": {"PTS": 15.8, "REB": 4.1, "AST": 6.8, "POS": "G", "TEAM": "Houston Rockets"},
-        "Jabari Smith Jr": {"PTS": 13.6, "REB": 7.8, "AST": 1.6, "POS": "F", "TEAM": "Houston Rockets"},
-        "Dillon Brooks": {"PTS": 12.4, "REB": 3.8, "AST": 1.6, "POS": "G", "TEAM": "Houston Rockets"},
-        "Amen Thompson": {"PTS": 11.8, "REB": 7.2, "AST": 3.4, "POS": "G", "TEAM": "Houston Rockets"},
-        "Tari Eason": {"PTS": 11.2, "REB": 6.4, "AST": 1.4, "POS": "F", "TEAM": "Houston Rockets"},
-        "Paolo Banchero": {"PTS": 25.8, "REB": 7.6, "AST": 5.4, "POS": "F", "TEAM": "Orlando Magic"},
-        "Franz Wagner": {"PTS": 24.8, "REB": 5.7, "AST": 4.6, "POS": "F", "TEAM": "Orlando Magic"},
-        "Jalen Suggs": {"PTS": 15.6, "REB": 4.2, "AST": 3.8, "POS": "G", "TEAM": "Orlando Magic"},
-        "Wendell Carter Jr": {"PTS": 10.8, "REB": 8.4, "AST": 2.1, "POS": "C", "TEAM": "Orlando Magic"},
-        "Kentavious Caldwell-Pope": {"PTS": 9.4, "REB": 2.4, "AST": 1.9, "POS": "G", "TEAM": "Orlando Magic"},
-        "Cole Anthony": {"PTS": 11.2, "REB": 3.6, "AST": 3.2, "POS": "G", "TEAM": "Orlando Magic"},
-        "Moritz Wagner": {"PTS": 10.6, "REB": 4.8, "AST": 1.4, "POS": "C", "TEAM": "Orlando Magic"},
-        "Anthony Black": {"PTS": 8.4, "REB": 3.1, "AST": 3.6, "POS": "G", "TEAM": "Orlando Magic"},
-        "Lauri Markkanen": {"PTS": 23.6, "REB": 8.2, "AST": 2.1, "POS": "F", "TEAM": "Utah Jazz"},
-        "Keyonte George": {"PTS": 16.4, "REB": 3.4, "AST": 5.8, "POS": "G", "TEAM": "Utah Jazz"},
-        "Collin Sexton": {"PTS": 17.8, "REB": 2.8, "AST": 4.4, "POS": "G", "TEAM": "Utah Jazz"},
-        "John Collins": {"PTS": 16.2, "REB": 8.4, "AST": 2.1, "POS": "F", "TEAM": "Utah Jazz"},
-        "Walker Kessler": {"PTS": 10.4, "REB": 10.8, "AST": 1.4, "POS": "C", "TEAM": "Utah Jazz"},
-        "Jordan Clarkson": {"PTS": 15.4, "REB": 3.2, "AST": 3.8, "POS": "G", "TEAM": "Utah Jazz"},
-        "LeBron James": {"PTS": 24.2, "REB": 7.4, "AST": 8.9, "POS": "F", "TEAM": "Los Angeles Lakers"},
-        "Anthony Davis": {"PTS": 26.8, "REB": 12.4, "AST": 3.6, "POS": "C", "TEAM": "Washington Wizards"},
-        "Austin Reaves": {"PTS": 17.6, "REB": 4.2, "AST": 5.4, "POS": "G", "TEAM": "Los Angeles Lakers"},
-        "Rui Hachimura": {"PTS": 13.4, "REB": 5.2, "AST": 1.4, "POS": "F", "TEAM": "Los Angeles Lakers"},
-        "D'Angelo Russell": {"PTS": 14.2, "REB": 2.8, "AST": 5.6, "POS": "G", "TEAM": "Los Angeles Lakers"},
-        "Dalton Knecht": {"PTS": 11.4, "REB": 3.2, "AST": 1.4, "POS": "G", "TEAM": "Los Angeles Lakers"},
-        "James Harden": {"PTS": 21.4, "REB": 5.8, "AST": 8.9, "POS": "G", "TEAM": "Cleveland Cavaliers"},
-        "Norman Powell": {"PTS": 22.6, "REB": 3.4, "AST": 2.4, "POS": "G", "TEAM": "Chicago Bulls"},
-        "Ivica Zubac": {"PTS": 15.8, "REB": 12.2, "AST": 2.4, "POS": "C", "TEAM": "Los Angeles Clippers"},
-        "Derrick Jones Jr": {"PTS": 10.2, "REB": 3.6, "AST": 1.1, "POS": "F", "TEAM": "Los Angeles Clippers"},
-        "Terance Mann": {"PTS": 8.4, "REB": 3.4, "AST": 2.1, "POS": "G", "TEAM": "Los Angeles Clippers"},
-        "Nikola Jokic": {"PTS": 29.1, "REB": 13.2, "AST": 10.4, "POS": "C", "TEAM": "Denver Nuggets"},
-        "Jamal Murray": {"PTS": 21.8, "REB": 4.1, "AST": 6.5, "POS": "G", "TEAM": "Denver Nuggets"},
-        "Michael Porter Jr": {"PTS": 18.2, "REB": 7.1, "AST": 2.4, "POS": "F", "TEAM": "Denver Nuggets"},
-        "Aaron Gordon": {"PTS": 14.6, "REB": 6.4, "AST": 3.2, "POS": "F", "TEAM": "Denver Nuggets"},
-        "Christian Braun": {"PTS": 13.8, "REB": 5.1, "AST": 2.2, "POS": "G", "TEAM": "Denver Nuggets"},
-        "Russell Westbrook": {"PTS": 11.4, "REB": 4.6, "AST": 5.8, "POS": "G", "TEAM": "Denver Nuggets"},
-        "Luka Doncic": {"PTS": 34.5, "REB": 9.1, "AST": 9.6, "POS": "G", "TEAM": "Los Angeles Lakers"},
-        "Kyrie Irving": {"PTS": 25.4, "REB": 4.9, "AST": 5.3, "POS": "G", "TEAM": "Dallas Mavericks"},
-        "Klay Thompson": {"PTS": 14.2, "REB": 3.4, "AST": 2.0, "POS": "G", "TEAM": "Miami Heat"},
-        "PJ Washington": {"PTS": 12.4, "REB": 7.6, "AST": 1.9, "POS": "F", "TEAM": "Dallas Mavericks"},
-        "Daniel Gafford": {"PTS": 11.8, "REB": 7.2, "AST": 1.4, "POS": "C", "TEAM": "Dallas Mavericks"},
-        "Dereck Lively II": {"PTS": 9.4, "REB": 7.8, "AST": 2.1, "POS": "C", "TEAM": "Dallas Mavericks"},
-        "Caleb Martin": {"PTS": 10.4, "REB": 4.2, "AST": 2.2, "POS": "F", "TEAM": "Dallas Mavericks"},
+        "Alperen Sengun": {"PTS": 21.6, "REB": 9.3, "AST": 7.0, "POS": "C", "TEAM": "Houston Rockets"},
+        "Franz Wagner": {"PTS": 25.1, "REB": 5.7, "AST": 8.4, "POS": "F", "TEAM": "Orlando Magic"},
+        "Wendell Carter Jr": {"PTS": 10.8, "REB": 8.7, "AST": 2.1, "POS": "C", "TEAM": "Orlando Magic"},
+        "Walker Kessler": {"PTS": 10.4, "REB": 10.7, "AST": 1.4, "POS": "C", "TEAM": "Utah Jazz"},
+        "LeBron James": {"PTS": 24.2, "REB": 7.4, "AST": 6.8, "POS": "F", "TEAM": "Los Angeles Lakers"},
+        "Luka Doncic": {"PTS": 37.2, "REB": 9.1, "AST": 7.7, "POS": "G", "TEAM": "Los Angeles Lakers"},
+        "Austin Reaves": {"PTS": 24.7, "REB": 4.2, "AST": 5.4, "POS": "G", "TEAM": "Los Angeles Lakers"},
+        "Anthony Davis": {"PTS": 25.3, "REB": 10.1, "AST": 3.6, "POS": "C", "TEAM": "Washington Wizards"},
+        "Trae Young": {"PTS": 24.2, "REB": 3.1, "AST": 8.6, "POS": "G", "TEAM": "Washington Wizards"},
+        "Nikola Jokic": {"PTS": 29.1, "REB": 10.4, "AST": 9.1, "POS": "C", "TEAM": "Denver Nuggets"},
+        "Jamal Murray": {"PTS": 24.9, "REB": 4.1, "AST": 6.5, "POS": "G", "TEAM": "Denver Nuggets"},
         "Anthony Edwards": {"PTS": 28.1, "REB": 5.8, "AST": 5.1, "POS": "G", "TEAM": "Minnesota Timberwolves"},
-        "Julius Randle": {"PTS": 21.2, "REB": 7.4, "AST": 4.6, "POS": "F", "TEAM": "Minnesota Timberwolves"},
-        "Rudy Gobert": {"PTS": 11.4, "REB": 11.2, "AST": 1.6, "POS": "C", "TEAM": "Minnesota Timberwolves"},
-        "Naz Reid": {"PTS": 14.4, "REB": 5.6, "AST": 1.8, "POS": "C", "TEAM": "Minnesota Timberwolves"},
-        "Jaden McDaniels": {"PTS": 13.8, "REB": 4.1, "AST": 1.6, "POS": "F", "TEAM": "Minnesota Timberwolves"},
-        "Donte DiVincenzo": {"PTS": 11.8, "REB": 3.8, "AST": 3.4, "POS": "G", "TEAM": "Minnesota Timberwolves"},
-        "Mike Conley": {"PTS": 9.2, "REB": 2.8, "AST": 5.4, "POS": "G", "TEAM": "Minnesota Timberwolves"},
-        "Terance Shannon Jr": {"PTS": 11.1, "REB": 3.5, "AST": 2.6, "POS": "G", "TEAM": "Minnesota Timberwolves"},
-        "Devin Booker": {"PTS": 27.8, "REB": 4.6, "AST": 6.9, "POS": "G", "TEAM": "Phoenix Suns"},
-        "Bradley Beal": {"PTS": 17.8, "REB": 4.1, "AST": 4.6, "POS": "G", "TEAM": "Phoenix Suns"},
-        "Jusuf Nurkic": {"PTS": 9.6, "REB": 9.8, "AST": 2.8, "POS": "C", "TEAM": "Phoenix Suns"},
-        "Tyus Jones": {"PTS": 10.4, "REB": 2.8, "AST": 6.4, "POS": "G", "TEAM": "Phoenix Suns"},
-        "Grayson Allen": {"PTS": 13.6, "REB": 3.2, "AST": 2.4, "POS": "G", "TEAM": "Phoenix Suns"},
-        "Royce O'Neale": {"PTS": 8.4, "REB": 4.8, "AST": 2.8, "POS": "F", "TEAM": "Phoenix Suns"},
-        "Victor Wembanyama": {"PTS": 26.8, "REB": 11.2, "AST": 4.1, "POS": "C", "TEAM": "San Antonio Spurs"},
+        "Rudy Gobert": {"PTS": 11.4, "REB": 10.9, "AST": 1.6, "POS": "C", "TEAM": "Minnesota Timberwolves"},
+        "Devin Booker": {"PTS": 24.7, "REB": 4.6, "AST": 6.9, "POS": "G", "TEAM": "Phoenix Suns"},
+        "Victor Wembanyama": {"PTS": 28.6, "REB": 11.9, "AST": 4.1, "POS": "C", "TEAM": "San Antonio Spurs"},
         "De'Aaron Fox": {"PTS": 24.6, "REB": 4.6, "AST": 6.1, "POS": "G", "TEAM": "San Antonio Spurs"},
-        "Devin Vassell": {"PTS": 17.6, "REB": 3.8, "AST": 3.6, "POS": "G", "TEAM": "San Antonio Spurs"},
-        "Jeremy Sochan": {"PTS": 13.8, "REB": 7.8, "AST": 3.2, "POS": "F", "TEAM": "San Antonio Spurs"},
-        "Chris Paul": {"PTS": 9.8, "REB": 3.8, "AST": 8.2, "POS": "G", "TEAM": "San Antonio Spurs"},
-        "Harrison Barnes": {"PTS": 11.4, "REB": 4.4, "AST": 1.8, "POS": "F", "TEAM": "San Antonio Spurs"},
-        "Stephon Castle": {"PTS": 11.2, "REB": 3.2, "AST": 3.8, "POS": "G", "TEAM": "San Antonio Spurs"},
-        "Domantas Sabonis": {"PTS": 19.8, "REB": 14.1, "AST": 7.8, "POS": "C", "TEAM": "Sacramento Kings"},
-        "DeMar DeRozan": {"PTS": 22.8, "REB": 4.2, "AST": 4.4, "POS": "F", "TEAM": "Sacramento Kings"},
-        "Keegan Murray": {"PTS": 13.8, "REB": 7.2, "AST": 1.8, "POS": "F", "TEAM": "Sacramento Kings"},
-        "Malik Monk": {"PTS": 15.2, "REB": 3.2, "AST": 4.8, "POS": "G", "TEAM": "Sacramento Kings"},
-        "Darius Acuff Jr": {"PTS": 23.8, "REB": 3.8, "AST": 5.4, "POS": "G", "TEAM": "Sacramento Kings"},
-        "Ja Morant": {"PTS": 25.4, "REB": 5.1, "AST": 8.4, "POS": "G", "TEAM": "Memphis Grizzlies"},
-        "Jaren Jackson Jr": {"PTS": 22.4, "REB": 6.1, "AST": 1.8, "POS": "F", "TEAM": "Memphis Grizzlies"},
-        "Desmond Bane": {"PTS": 19.8, "REB": 4.6, "AST": 4.8, "POS": "G", "TEAM": "Memphis Grizzlies"},
-        "Santi Aldama": {"PTS": 12.6, "REB": 6.8, "AST": 2.4, "POS": "F", "TEAM": "Memphis Grizzlies"},
-        "Scotty Pippen Jr": {"PTS": 11.4, "REB": 3.8, "AST": 5.6, "POS": "G", "TEAM": "Memphis Grizzlies"},
-        "Zach Edey": {"PTS": 10.8, "REB": 7.6, "AST": 1.0, "POS": "C", "TEAM": "Memphis Grizzlies"},
-        "Cam Spencer": {"PTS": 9.3, "REB": 3.3, "AST": 4.8, "POS": "G", "TEAM": "Memphis Grizzlies"},
-        "GG Jackson": {"PTS": 7.8, "REB": 3.4, "AST": 1.2, "POS": "F", "TEAM": "Memphis Grizzlies"},
-        "Cedric Coward": {"PTS": 11.2, "REB": 7.8, "AST": 2.1, "POS": "F", "TEAM": "Memphis Grizzlies"},
-        "Giannis Antetokounmpo": {"PTS": 30.8, "REB": 11.6, "AST": 6.1, "POS": "F", "TEAM": "Miami Heat"},
-        "Bobby Portis": {"PTS": 13.4, "REB": 7.8, "AST": 1.4, "POS": "F", "TEAM": "Milwaukee Bucks"},
-        "Brook Lopez": {"PTS": 11.8, "REB": 5.2, "AST": 1.6, "POS": "C", "TEAM": "Milwaukee Bucks"},
-        "Gary Trent Jr": {"PTS": 11.2, "REB": 2.6, "AST": 1.6, "POS": "G", "TEAM": "Milwaukee Bucks"},
-        "Donovan Mitchell": {"PTS": 27.2, "REB": 4.4, "AST": 5.2, "POS": "G", "TEAM": "Cleveland Cavaliers"},
-        "Darius Garland": {"PTS": 20.4, "REB": 2.8, "AST": 6.6, "POS": "G", "TEAM": "Cleveland Cavaliers"},
-        "Evan Mobley": {"PTS": 18.2, "REB": 9.2, "AST": 2.8, "POS": "C", "TEAM": "Cleveland Cavaliers"},
-        "Jarrett Allen": {"PTS": 14.6, "REB": 10.8, "AST": 2.1, "POS": "C", "TEAM": "Cleveland Cavaliers"},
-        "Caris LeVert": {"PTS": 11.8, "REB": 3.4, "AST": 4.2, "POS": "G", "TEAM": "Cleveland Cavaliers"},
-        "Dean Wade": {"PTS": 6.2, "REB": 4.2, "AST": 1.6, "POS": "F", "TEAM": "Cleveland Cavaliers"},
-        "Jaylon Tyson": {"PTS": 8.3, "REB": 3.0, "AST": 1.8, "POS": "G", "TEAM": "Cleveland Cavaliers"},
-        "Thomas Bryant": {"PTS": 8.7, "REB": 2.0, "AST": 0.8, "POS": "C", "TEAM": "Cleveland Cavaliers"},
-        "Mario Hezonja": {"PTS": 7.5, "REB": 5.3, "AST": 1.5, "POS": "F", "TEAM": "Cleveland Cavaliers"},
-        "Craig Porter Jr": {"PTS": 1.4, "REB": 1.7, "AST": 1.4, "POS": "G", "TEAM": "Cleveland Cavaliers"},
-        "Isaac Okoro": {"PTS": 6.8, "REB": 1.6, "AST": 1.4, "POS": "F", "TEAM": "Chicago Bulls"},
-        "Caleb Wilson": {"PTS": 11.4, "REB": 6.2, "AST": 2.1, "POS": "F", "TEAM": "Chicago Bulls"},
-        "Ryan Conwell": {"PTS": 5.8, "REB": 1.6, "AST": 1.3, "POS": "G", "TEAM": "Miami Heat"},
-        "Pelle Larsson": {"PTS": 9.8, "REB": 3.6, "AST": 2.4, "POS": "G", "TEAM": "Miami Heat"},
-        "Andre Drummond": {"PTS": 6.8, "REB": 7.9, "AST": 0.8, "POS": "C", "TEAM": "New York Knicks"},
+        "Domantas Sabonis": {"PTS": 19.8, "REB": 13.4, "AST": 7.8, "POS": "C", "TEAM": "Sacramento Kings"},
+        "Darius Acuff Jr": {"PTS": 25.7, "REB": 3.8, "AST": 7.3, "POS": "G", "TEAM": "Sacramento Kings"},
+        "Giannis Antetokounmpo": {"PTS": 28.2, "REB": 12.6, "AST": 6.1, "POS": "F", "TEAM": "Miami Heat"},
+        "Bam Adebayo": {"PTS": 20.2, "REB": 10.4, "AST": 4.1, "POS": "C", "TEAM": "Miami Heat"},
+        "Davion Mitchell": {"PTS": 16.5, "REB": 3.2, "AST": 9.0, "POS": "G", "TEAM": "Miami Heat"},
+        "Donovan Mitchell": {"PTS": 24.5, "REB": 4.4, "AST": 5.2, "POS": "G", "TEAM": "Cleveland Cavaliers"},
+        "Darius Garland": {"PTS": 20.4, "REB": 2.8, "AST": 6.8, "POS": "G", "TEAM": "Cleveland Cavaliers"},
         "Tyrese Maxey": {"PTS": 26.5, "REB": 3.8, "AST": 6.4, "POS": "G", "TEAM": "Philadelphia 76ers"},
         "Joel Embiid": {"PTS": 19.5, "REB": 8.5, "AST": 3.5, "POS": "C", "TEAM": "Philadelphia 76ers"},
-        "Paul George": {"PTS": 18.6, "REB": 5.6, "AST": 4.4, "POS": "F", "TEAM": "Philadelphia 76ers"},
-        "Kelly Oubre Jr": {"PTS": 13.8, "REB": 4.8, "AST": 1.6, "POS": "F", "TEAM": "Indiana Pacers"},
-        "Jared McCain": {"PTS": 15.2, "REB": 2.6, "AST": 2.8, "POS": "G", "TEAM": "Philadelphia 76ers"},
-        "Bam Adebayo": {"PTS": 20.2, "REB": 10.4, "AST": 4.1, "POS": "C", "TEAM": "Miami Heat"},
-        "Tyler Herro": {"PTS": 23.4, "REB": 5.2, "AST": 4.8, "POS": "G", "TEAM": "Miami Heat"},
-        "Terry Rozier": {"PTS": 13.4, "REB": 3.8, "AST": 4.2, "POS": "G", "TEAM": "Miami Heat"},
-        "Jaime Jaquez Jr": {"PTS": 10.8, "REB": 4.8, "AST": 2.4, "POS": "F", "TEAM": "Miami Heat"},
-        "Duncan Robinson": {"PTS": 11.8, "REB": 2.4, "AST": 2.2, "POS": "G", "TEAM": "Detroit Pistons"},
-        "Tyrese Haliburton": {"PTS": 21.4, "REB": 3.9, "AST": 10.4, "POS": "G", "TEAM": "Indiana Pacers"},
+        "Cade Cunningham": {"PTS": 25.6, "REB": 6.4, "AST": 7.9, "POS": "G", "TEAM": "Detroit Pistons"},
+        "Jalen Johnson": {"PTS": 19.6, "REB": 9.0, "AST": 7.5, "POS": "F", "TEAM": "Atlanta Hawks"},
+        "Josh Giddey": {"PTS": 13.2, "REB": 6.8, "AST": 8.4, "POS": "G", "TEAM": "Chicago Bulls"},
+        "Andrew Nembhard": {"PTS": 14.5, "REB": 3.5, "AST": 7.7, "POS": "G", "TEAM": "Indiana Pacers"},
         "Pascal Siakam": {"PTS": 20.6, "REB": 7.2, "AST": 3.8, "POS": "F", "TEAM": "Indiana Pacers"},
-        "Myles Turner": {"PTS": 15.8, "REB": 7.1, "AST": 1.6, "POS": "C", "TEAM": "Milwaukee Bucks"},
-        "Bennedict Mathurin": {"PTS": 16.8, "REB": 5.8, "AST": 2.0, "POS": "G", "TEAM": "Indiana Pacers"},
-        "Andrew Nembhard": {"PTS": 10.8, "REB": 3.1, "AST": 4.8, "POS": "G", "TEAM": "Indiana Pacers"},
-        "TJ McConnell": {"PTS": 10.2, "REB": 2.6, "AST": 5.2, "POS": "G", "TEAM": "Indiana Pacers"},
-        "Trae Young": {"PTS": 24.2, "REB": 3.1, "AST": 10.8, "POS": "G", "TEAM": "Washington Wizards"},
-        "Jalen Johnson": {"PTS": 19.6, "REB": 10.1, "AST": 5.2, "POS": "F", "TEAM": "Atlanta Hawks"},
-        "Dyson Daniels": {"PTS": 13.8, "REB": 5.1, "AST": 3.6, "POS": "G", "TEAM": "Atlanta Hawks"},
-        "Clint Capela": {"PTS": 10.4, "REB": 9.2, "AST": 1.2, "POS": "C", "TEAM": "Atlanta Hawks"},
-        "Onyeka Okongwu": {"PTS": 11.2, "REB": 6.8, "AST": 1.6, "POS": "C", "TEAM": "Atlanta Hawks"},
-        "Zaccharie Risacher": {"PTS": 11.6, "REB": 3.8, "AST": 1.4, "POS": "F", "TEAM": "Atlanta Hawks"},
-        "Cade Cunningham": {"PTS": 24.6, "REB": 6.4, "AST": 9.1, "POS": "G", "TEAM": "Detroit Pistons"},
-        "Jaden Ivey": {"PTS": 17.8, "REB": 4.2, "AST": 4.2, "POS": "G", "TEAM": "Detroit Pistons"},
-        "Tobias Harris": {"PTS": 13.8, "REB": 6.8, "AST": 2.4, "POS": "F", "TEAM": "Detroit Pistons"},
-        "Jalen Duren": {"PTS": 10.6, "REB": 10.2, "AST": 2.4, "POS": "C", "TEAM": "Detroit Pistons"},
-        "Malik Beasley": {"PTS": 15.4, "REB": 3.1, "AST": 1.8, "POS": "G", "TEAM": "Detroit Pistons"},
-        "Paul Reed Jr": {"PTS": 7.4, "REB": 5.2, "AST": 1.4, "POS": "C", "TEAM": "Detroit Pistons"},
-        "Kevin Huerter": {"PTS": 11.8, "REB": 3.4, "AST": 2.6, "POS": "G", "TEAM": "Detroit Pistons"},
-        "LaMelo Ball": {"PTS": 26.9, "REB": 5.4, "AST": 8.2, "POS": "G", "TEAM": "Charlotte Hornets"},
-        "Brandon Miller": {"PTS": 21.2, "REB": 5.2, "AST": 3.6, "POS": "F", "TEAM": "Charlotte Hornets"},
-        "Miles Bridges": {"PTS": 17.4, "REB": 6.8, "AST": 3.1, "POS": "F", "TEAM": "Charlotte Hornets"},
-        "Tidjane Salaun": {"PTS": 7.6, "REB": 4.4, "AST": 1.4, "POS": "F", "TEAM": "Charlotte Hornets"},
-        "Moussa Diabate": {"PTS": 6.4, "REB": 7.8, "AST": 1.0, "POS": "C", "TEAM": "Charlotte Hornets"},
-        "Zach LaVine": {"PTS": 23.4, "REB": 4.8, "AST": 4.1, "POS": "G", "TEAM": "Chicago Bulls"},
-        "Nikola Vucevic": {"PTS": 18.2, "REB": 10.8, "AST": 3.4, "POS": "C", "TEAM": "Chicago Bulls"},
-        "Coby White": {"PTS": 19.4, "REB": 4.2, "AST": 4.8, "POS": "G", "TEAM": "Chicago Bulls"},
-        "Josh Giddey": {"PTS": 13.2, "REB": 6.8, "AST": 6.9, "POS": "G", "TEAM": "Chicago Bulls"},
-        "Ayo Dosunmu": {"PTS": 12.4, "REB": 3.6, "AST": 3.8, "POS": "G", "TEAM": "Minnesota Timberwolves"},
-        "Scottie Barnes": {"PTS": 20.8, "REB": 8.2, "AST": 6.4, "POS": "F", "TEAM": "Toronto Raptors"},
-        "RJ Barrett": {"PTS": 22.6, "REB": 6.2, "AST": 5.8, "POS": "F", "TEAM": "Toronto Raptors"},
-        "Immanuel Quickley": {"PTS": 17.4, "REB": 3.8, "AST": 6.4, "POS": "G", "TEAM": "Toronto Raptors"},
-        "Jakob Poeltl": {"PTS": 14.4, "REB": 11.4, "AST": 2.6, "POS": "C", "TEAM": "Toronto Raptors"},
-        "Gradey Dick": {"PTS": 16.8, "REB": 3.4, "AST": 2.1, "POS": "G", "TEAM": "Toronto Raptors"},
-        "Cam Thomas": {"PTS": 24.2, "REB": 3.4, "AST": 3.4, "POS": "G", "TEAM": "Brooklyn Nets"},
-        "Dennis Schroder": {"PTS": 17.8, "REB": 3.1, "AST": 6.4, "POS": "G", "TEAM": "Brooklyn Nets"},
-        "Cameron Johnson": {"PTS": 18.2, "REB": 4.4, "AST": 2.9, "POS": "F", "TEAM": "Denver Nuggets"},
-        "Nic Claxton": {"PTS": 10.4, "REB": 8.4, "AST": 2.2, "POS": "C", "TEAM": "Brooklyn Nets"},
-        "Jordan Poole": {"PTS": 20.2, "REB": 2.6, "AST": 4.8, "POS": "G", "TEAM": "Washington Wizards"},
-        "Kyle Kuzma": {"PTS": 17.8, "REB": 6.2, "AST": 3.2, "POS": "F", "TEAM": "Milwaukee Bucks"},
-        "Alex Sarr": {"PTS": 10.8, "REB": 7.6, "AST": 2.1, "POS": "C", "TEAM": "Washington Wizards"},
-        "Bilal Coulibaly": {"PTS": 12.4, "REB": 5.4, "AST": 2.8, "POS": "F", "TEAM": "Washington Wizards"},
-        "Kyshawn George": {"PTS": 15.4, "REB": 4.6, "AST": 4.2, "POS": "G", "TEAM": "Washington Wizards"},
-        "Jonas Valanciunas": {"PTS": 12.2, "REB": 8.1, "AST": 2.2, "POS": "C", "TEAM": "Washington Wizards"},
-        "Brandon Ingram": {"PTS": 22.8, "REB": 5.6, "AST": 5.2, "POS": "F", "TEAM": "New Orleans Pelicans"},
-        "Trey Murphy III": {"PTS": 18.4, "REB": 4.8, "AST": 2.6, "POS": "F", "TEAM": "New Orleans Pelicans"},
-        "Yves Missi": {"PTS": 9.2, "REB": 8.4, "AST": 1.4, "POS": "C", "TEAM": "New Orleans Pelicans"}
+        "Moussa Diabate": {"PTS": 7.4, "REB": 10.6, "AST": 1.0, "POS": "C", "TEAM": "Charlotte Hornets"}
     }
     return {normalize_name(k): v for k, v in raw_baselines.items()}
 
@@ -708,7 +608,7 @@ def sync_live_nba_data():
             cached["fatigue_map"]
         )
 
-    print("🔄 Syncing V14 NBA Engine: Multi-Book 1Q PTS/REB/AST (7+/10), ID-First PBP, & V13 Guards...")
+    print("🔄 Syncing V15 NBA Engine: 7/10 FG & 1Q Logs, Median L5 Min, Fresh-Injury Guard, & Pinnacle 10-Book...")
 
     # 1. Layer Official ESPN Season Averages on top of Fallback Dictionary
     espn_season_stats = fetch_espn_season_averages()
@@ -733,9 +633,15 @@ def sync_live_nba_data():
             "L10_PRA": s_data["PRA"],
             "SZN_MIN": s_data["MIN"],
             "L5_MIN": s_data["MIN"],
-            "L3_MIN": s_data["MIN"],
+            "MEDIAN_L5_MIN": s_data["MIN"],
             "RECENT_GAMES": 0,
+            "LAST_10D_GAMES": 0,
             "IS_STARTER": False,
+            "FG_PTS_L10": [],
+            "FG_REB_L10": [],
+            "FG_AST_L10": [],
+            "FG_3PM_L10": [],
+            "FG_PRA_L10": [],
             "Q1_PTS_L10": [],
             "Q1_REB_L10": [],
             "Q1_AST_L10": [],
@@ -748,15 +654,16 @@ def sync_live_nba_data():
         p_data.setdefault("PRA", round(p_data["PTS"] + p_data["REB"] + p_data["AST"], 2))
         p_data.setdefault("SZN_MIN", 24.0)
         p_data.setdefault("L5_MIN", 24.0)
-        p_data.setdefault("L3_MIN", 24.0)
+        p_data.setdefault("MEDIAN_L5_MIN", 24.0)
         p_data.setdefault("RECENT_GAMES", 0)
+        p_data.setdefault("LAST_10D_GAMES", 0)
         p_data.setdefault("IS_STARTER", False)
-        p_data.setdefault("Q1_PTS_L10", [])
-        p_data.setdefault("Q1_REB_L10", [])
-        p_data.setdefault("Q1_AST_L10", [])
         for k in ["PTS", "REB", "AST", "3PM", "PRA"]:
             p_data.setdefault(f"SZN_{k}", p_data[k])
             p_data.setdefault(f"L10_{k}", p_data[k])
+            p_data.setdefault(f"FG_{k}_L10", [])
+        for k in ["PTS", "REB", "AST"]:
+            p_data.setdefault(f"Q1_{k}_L10", [])
 
     try:
         st_url = "https://site.api.espn.com/apis/v2/sports/basketball/nba/standings"
@@ -858,8 +765,7 @@ def sync_live_nba_data():
                             if not p_disp or not s_vals or pts_idx == -1:
                                 continue
                             try:
-                                min_raw = str(s_vals[min_idx]).split(":")[0] if min_idx != -1 else "0"
-                                mins = float(min_raw) if min_raw.isdigit() else 0.0
+                                mins = parse_minutes(s_vals[min_idx]) if min_idx != -1 else 0.0
                                 if mins <= 0.0:
                                     continue
                                 active_slot += 1
@@ -884,7 +790,8 @@ def sync_live_nba_data():
                                 if norm_p not in player_logs:
                                     player_logs[norm_p] = {
                                         "PTS": [], "REB": [], "AST": [], "3PM": [], "PRA": [], "MIN": [],
-                                        "STARTS": [], "Q1_PTS": [], "Q1_REB": [], "Q1_AST": [],
+                                        "STARTS": [], "LAST_10D_GAMES": 0,
+                                        "Q1_PTS": [], "Q1_REB": [], "Q1_AST": [],
                                         "TEAM": t_name, "POS": mapped_pos
                                     }
                                 player_logs[norm_p]["PTS"].append(pts)
@@ -894,6 +801,8 @@ def sync_live_nba_data():
                                 player_logs[norm_p]["PRA"].append(pts + reb + ast)
                                 player_logs[norm_p]["MIN"].append(mins)
                                 player_logs[norm_p]["STARTS"].append(1 if is_game_starter else 0)
+                                if days_ago <= 10:
+                                    player_logs[norm_p]["LAST_10D_GAMES"] += 1
                                 player_logs[norm_p]["TEAM"] = t_name
 
                                 if norm_p in q1_game_map and (is_game_starter or mins >= 18.0):
@@ -947,7 +856,7 @@ def sync_live_nba_data():
             "tag": "/".join(tags) if tags else ""
         }
 
-    # Blend 50% Official Season Avg (SZN) + 50% Last 10 Games (L10) & Store Starter Q1 L10 Logs
+    # Blend 50% Official Season Avg (SZN) + 50% Last 10 Games (L10) & Store Full-Game + 1Q L10 Logs
     for norm_p, logs in player_logs.items():
         games_count = len(logs["PTS"])
         if games_count >= 1:
@@ -964,7 +873,7 @@ def sync_live_nba_data():
             l10_3pm = float(np.mean(logs["3PM"][-10:]))
             l10_pra = float(np.mean(logs["PRA"][-10:]))
             l5_min = float(np.mean(logs["MIN"][-5:]))
-            l3_min = float(np.mean(logs["MIN"][-3:]))
+            median_l5_min = float(np.median(logs["MIN"][-5:]))
 
             if norm_p in espn_season_stats:
                 szn_pts = espn_season_stats[norm_p]["PTS"]
@@ -1011,9 +920,15 @@ def sync_live_nba_data():
                 "L10_PRA": round(l10_pra, 1),
                 "SZN_MIN": round(szn_min, 1),
                 "L5_MIN": round(l5_min, 1),
-                "L3_MIN": round(l3_min, 1),
+                "MEDIAN_L5_MIN": round(median_l5_min, 1),
                 "RECENT_GAMES": games_count,
+                "LAST_10D_GAMES": logs["LAST_10D_GAMES"],
                 "IS_STARTER": is_normal_starter,
+                "FG_PTS_L10": logs["PTS"][-10:],
+                "FG_REB_L10": logs["REB"][-10:],
+                "FG_AST_L10": logs["AST"][-10:],
+                "FG_3PM_L10": logs["3PM"][-10:],
+                "FG_PRA_L10": logs["PRA"][-10:],
                 "Q1_PTS_L10": logs["Q1_PTS"][-10:],
                 "Q1_REB_L10": logs["Q1_REB"][-10:],
                 "Q1_AST_L10": logs["Q1_AST"][-10:],
@@ -1089,8 +1004,15 @@ def sync_live_nba_data():
         "pos_def_mults": pos_def_mults,
         "fatigue_map": fatigue_map
     })
-    starter_cnt = sum(1 for v in player_db.values() if v.get("IS_STARTER"))
-    print(f"✅ Synced {len(player_db)} players ({starter_cnt} verified starters with 1Q PTS/REB/AST L10 logs)!")
+
+    # Startup Audit: Verify ESPN Play-by-Play 1Q REB & AST Parsing
+    starters_with_q1 = [(k, v) for k, v in player_db.items() if v.get("IS_STARTER") and len(v.get("Q1_REB_L10", [])) >= 7]
+    top_q1_reb = sorted(starters_with_q1, key=lambda x: float(np.mean(x[1]["Q1_REB_L10"])), reverse=True)[:3]
+    top_q1_ast = sorted(starters_with_q1, key=lambda x: float(np.mean(x[1]["Q1_AST_L10"])), reverse=True)[:3]
+    reb_audit = ", ".join(f"{k.title()} ({np.mean(v['Q1_REB_L10']):.1f})" for k, v in top_q1_reb)
+    ast_audit = ", ".join(f"{k.title()} ({np.mean(v['Q1_AST_L10']):.1f})" for k, v in top_q1_ast)
+    print(f"✅ Synced {len(player_db)} players ({len(starters_with_q1)} starters with 7+ 1Q logs)!")
+    print(f"🔍 1Q PBP Audit — Top Q1 REB: [{reb_audit}] | Top Q1 AST: [{ast_audit}]")
     return team_db, player_db, opp_ranks, pos_ranks, pos_def_mults, fatigue_map
 
 def fetch_injured_players():
@@ -1134,12 +1056,12 @@ def fetch_injured_players():
 def calc_team_injury_deduction(team_name, player_db, confirmed_out, questionable_gtd):
     """
     Deducts projected team points for Out (100% weight) & Questionable/GTD (55% weight) scorers.
-    Requires RECENT_GAMES >= 2 so long-term injured / ghost fallback players are never double-counted.
+    Requires LAST_10D_GAMES >= 1 so multi-week absences already baked into team ratings aren't double-counted.
     """
     penalty = 0.0
     gtd_star_count = 0
     for norm_p, p_data in player_db.items():
-        if p_data.get("TEAM") != team_name or p_data.get("RECENT_GAMES", 0) < 2:
+        if p_data.get("TEAM") != team_name or p_data.get("LAST_10D_GAMES", 0) < 1:
             continue
         pts = p_data.get("SZN_PTS", p_data.get("PTS", 0.0))
         if pts < 11.0:
@@ -1165,7 +1087,12 @@ def calc_team_fatigue_penalty(team_name, is_home, fatigue_map):
     return min(pen, 4.2)
 
 def calc_teammate_usage_boost(norm_p, team_name, player_pos, stat_code, player_db, confirmed_out, questionable_gtd):
-    """Calculates 'Next Man Up' usage multiplier and tracks missing team rotation minutes."""
+    """
+    V15 Fresh-Injury Usage Boost:
+    - Only counts teammates who played in the LAST 10 DAYS (LAST_10D_GAMES >= 1) so
+      multi-week absences already baked into L10 logs are never double-counted.
+    - Caps positive usage boost at +6% (1.06x).
+    """
     if not team_name:
         return 1.0, 0.0, 0.0
     missing_pts = 0.0
@@ -1175,7 +1102,7 @@ def calc_teammate_usage_boost(norm_p, team_name, player_pos, stat_code, player_d
     missing_pos_mins = 0.0
 
     for other_p, p_data in player_db.items():
-        if other_p == norm_p or p_data.get("TEAM") != team_name or p_data.get("RECENT_GAMES", 0) < 2:
+        if other_p == norm_p or p_data.get("TEAM") != team_name or p_data.get("LAST_10D_GAMES", 0) < 1:
             continue
         weight = 1.0 if other_p in confirmed_out else (0.55 if other_p in questionable_gtd else 0.0)
         if weight <= 0.0:
@@ -1198,33 +1125,33 @@ def calc_teammate_usage_boost(norm_p, team_name, player_pos, stat_code, player_d
             missing_reb += reb * weight
 
     total_missing_impact = missing_pts + missing_ast + missing_reb
-    pos_min_boost = min(0.06, missing_pos_mins * 0.0018)
+    pos_min_boost = min(0.03, missing_pos_mins * 0.0010)
 
     if stat_code in ["PTS", "3PM"]:
-        mult = 1.0 + (missing_pts * 0.0028) + pos_min_boost
+        mult = 1.0 + (missing_pts * 0.0016) + pos_min_boost
     elif stat_code == "AST":
-        mult = 1.0 + (missing_ast * 0.0085) + pos_min_boost
+        mult = 1.0 + (missing_ast * 0.0050) + pos_min_boost
     elif stat_code == "REB":
-        mult = 1.0 + (missing_reb * 0.0065) + pos_min_boost
+        mult = 1.0 + (missing_reb * 0.0040) + pos_min_boost
     else:
-        mult = 1.0 + (total_missing_impact * 0.0022) + pos_min_boost
+        mult = 1.0 + (total_missing_impact * 0.0013) + pos_min_boost
 
-    return min(1.15, mult), total_missing_impact, missing_team_mins
+    return min(1.06, mult), total_missing_impact, missing_team_mins
 
 def is_spot_starter_under_trap(pick_dir, stat_code, line, szn_avg, l10_avg, szn_min, usage_boost_mult, missing_team_impact, missing_team_mins):
     """
-    Blocks Under bets when lines or usage spike due to teammate absences:
-    - Applies to ALL players (including 30+ MPG stars) when 30+ star impact or 35+ rotation mins are Out/GTD.
-    - Blocks PRA Unders with a +4.5 absolute jump (or +18% jump when teammates are Out/GTD).
+    Blocks Under bets when lines or usage spike due to fresh teammate absences:
+    - Applies to ALL players (including 30+ MPG stars) when 30+ star impact or 35+ rotation mins are freshly Out/GTD.
+    - Blocks inflated lines (+4.5 PRA, +3.5 PTS, +1.6 REB/AST, or +28% jump).
     """
     if pick_dir != "Under":
         return False
     anchor = max(szn_avg, l10_avg, 0.5)
-    if szn_min < MIN_PLAYER_AVG_MINUTES:
+    if szn_min < MIN_FG_PROP_AVG_MINUTES:
         return True
     if missing_team_impact >= 30.0 or missing_team_mins >= 35.0:
         return True
-    if szn_min < 29.0 and (missing_team_mins >= 18.0 or usage_boost_mult >= 1.03 or missing_team_impact >= 20.0):
+    if szn_min < 29.0 and (missing_team_mins >= 18.0 or usage_boost_mult >= 1.02 or missing_team_impact >= 20.0):
         return True
     if line >= (anchor * 1.28):
         return True
@@ -1271,23 +1198,50 @@ def scan_all_fanduel_markets():
     now_utc = datetime.now(timezone.utc)
     today_ct_str = now_utc.astimezone(central_tz).strftime("%Y-%m-%d")
 
+    # Cross-Market Exposure Trackers for Today (Persisted Across 45-Min Rescans)
+    posted_players_today = set()   # (date_str, norm_p) across BOTH FG & 1Q props
+    posted_fg_teams_today = set()  # (date_str, team_name) max 1 FG prop per team
+    posted_fg_props_today_count = 0
+
+    for b in tracked_bets:
+        if not b.get("bet_key", "").startswith(today_ct_str):
+            continue
+        mkt = b.get("market", "")
+        if mkt in ["PLAYER_PROP", "PLAYER_PROP_Q1"] and b.get("player"):
+            norm_b_p = normalize_name(b["player"])
+            posted_players_today.add((today_ct_str, norm_b_p))
+            if mkt == "PLAYER_PROP":
+                posted_fg_props_today_count += 1
+                p_team = b.get("player_team") or normalize_team_name(player_db.get(norm_b_p, {}).get("TEAM", ""))
+                if p_team:
+                    posted_fg_teams_today.add((today_ct_str, p_team))
+
     url = "https://api.the-odds-api.com/v4/sports/basketball_nba/odds"
     params = {
         "apiKey": THE_ODDS_API_KEY,
-        "regions": "us",
         "markets": "totals,spreads",
         "bookmakers": BOOKMAKERS_LIST,
         "oddsFormat": "american"
     }
 
     res = requests.get(url, params=params, timeout=10)
-    print(f"📊 V14 Multi-Book Sync for {today_ct_str}! (Credits Remaining: {res.headers.get('x-requests-remaining')})")
+    print(f"📊 V15 Sniper 10-Book Sync for {today_ct_str}! (Credits Remaining: {res.headers.get('x-requests-remaining')})")
     if res.status_code != 200:
+        print(f"⚠️ Odds API Error ({res.status_code}): {res.text[:200]}")
         return
 
     events = res.json()
     deep_scans_done = 0
-    q1_offers_seen = {"PTS": 0, "REB": 0, "AST": 0}
+
+    # Collects FG prop candidates across the entire slate for per-player, per-team, and top-5 daily caps
+    slate_fg_prop_candidates = []
+
+    # Diagnostic counters for 1Q props across all 10 books
+    q1_offers_by_book = {"PTS": {}, "REB": {}, "AST": {}}
+    q1_filter_stats = {
+        k: {"raw_players": 0, "not_starter": 0, "low_logs": 0, "lt_7_hits": 0, "heavy_juice": 0, "red_dot": 0, "cons_or_inj": 0, "posted": 0}
+        for k in ["PTS", "REB", "AST"]
+    }
 
     for g in events:
         fd_markets, other_books = extract_fanduel_and_consensus(g.get("bookmakers", []))
@@ -1315,7 +1269,6 @@ def scan_all_fanduel_markets():
             for sfx in ["FG_TOTAL", "totals_h1", "totals_q1"]
         )
         game_total_candidates = []
-        player_fg_prop_candidates = {}
 
         h_stats = stats_db.get(home, {"off": avg_off, "def": avg_off, "pace": avg_pace, "opp_reb": avg_opp_reb, "opp_ast": avg_opp_ast, "q1_off": avg_q1_off, "q1_def": avg_q1_off, "h1_off": avg_h1_off, "h1_def": avg_h1_off})
         a_stats = stats_db.get(away, {"off": avg_off, "def": avg_off, "pace": avg_pace, "opp_reb": avg_opp_reb, "opp_ast": avg_opp_ast, "q1_off": avg_q1_off, "q1_def": avg_q1_off, "h1_off": avg_h1_off, "h1_def": avg_h1_off})
@@ -1330,7 +1283,7 @@ def scan_all_fanduel_markets():
         raw_h_pts = ((h_stats["off"] + a_stats["def"]) / 2.0) * pace_scaler
         raw_a_pts = ((a_stats["off"] + h_stats["def"]) / 2.0) * pace_scaler
 
-        # 2. Active-Rotation Star Injury & Schedule Fatigue
+        # 2. Fresh-Injury Deduction & Schedule Fatigue
         h_inj_pen, h_gtd_stars = calc_team_injury_deduction(home, player_db, confirmed_out, questionable_gtd)
         a_inj_pen, a_gtd_stars = calc_team_injury_deduction(away, player_db, confirmed_out, questionable_gtd)
 
@@ -1371,11 +1324,11 @@ def scan_all_fanduel_markets():
                                 continue
 
                             stat_win_prob = norm.cdf(abs(diff) / NBA_STD_DEV_TOTAL)
-                            win_prob = (0.80 * stat_win_prob + 0.20 * mkt_prob) if mkt_prob is not None else stat_win_prob
+                            win_prob = (0.75 * stat_win_prob + 0.25 * mkt_prob) if mkt_prob is not None else stat_win_prob
                             edge = win_prob - american_to_implied_prob(juice)
                             if edge >= MIN_EDGE_TEAM_MARKETS:
                                 ev_pct = edge * 100.0
-                                units = calc_kelly_units(win_prob, juice)
+                                units = calc_kelly_units(win_prob, juice, max_units=2.0)
                                 mkt_str = f" *(Mkt: {mkt_cons:.1f})*" if mkt_cons is not None else ""
                                 base_text = (
                                     f"**{a_ab} @ {h_ab} — {pick_dir} {line}** `({juice:+d})`\n"
@@ -1407,7 +1360,7 @@ def scan_all_fanduel_markets():
                         if bet_key not in already_posted:
                             mkt_home_cons, _ = get_devigged_spread_consensus(other_books, "spreads", home, h_line)
                             mkt_margin_anchor = -(mkt_home_cons if mkt_home_cons is not None else h_line)
-                            model_margin = 0.80 * stat_model_margin + 0.20 * mkt_margin_anchor
+                            model_margin = 0.75 * stat_model_margin + 0.25 * mkt_margin_anchor
 
                             sp_diff = model_margin - (-h_line)
                             if abs(sp_diff) > 6.0:
@@ -1432,11 +1385,11 @@ def scan_all_fanduel_markets():
                                 continue
 
                             stat_win_prob = norm.cdf(abs(sp_diff) / NBA_STD_DEV_SPREAD)
-                            win_prob = (0.80 * stat_win_prob + 0.20 * mkt_prob) if mkt_prob is not None else stat_win_prob
+                            win_prob = (0.75 * stat_win_prob + 0.25 * mkt_prob) if mkt_prob is not None else stat_win_prob
                             edge = win_prob - american_to_implied_prob(juice)
                             if edge >= MIN_EDGE_TEAM_MARKETS:
                                 ev_pct = edge * 100.0
-                                units = calc_kelly_units(win_prob, juice)
+                                units = calc_kelly_units(win_prob, juice, max_units=2.0)
                                 opp_def_rk = opp_ranks.get(opp_team, {}).get("PTS", 15)
                                 fair_line = -model_margin if pick_team == home else model_margin
                                 opp_fat_tag = fatigue_map.get(opp_team, {}).get("tag", "")
@@ -1453,7 +1406,7 @@ def scan_all_fanduel_markets():
                                     tracked_bets.append({"bet_key": bet_key, "message_id": msg_id, "away": away, "home": home, "market": "FG_SPREAD", "pick_team": pick_team, "line": pick_line, "juice": juice, "units": units, "base_text": base_text, "status": "PENDING"})
                                     already_posted.add(bet_key)
 
-        # --- B. DEEP SCAN: 1H / 1Q, FULL-GAME PROPS & MULTI-BOOK 1Q STARTER PROPS ---
+        # --- B. DEEP SCAN: 1H / 1Q, 7/10 SNIPER FG PROPS & 10-BOOK 1Q STARTER PROPS ---
         if (SCAN_HALVES_QUARTERS or SCAN_PLAYER_PROPS or SCAN_Q1_PLAYER_PROPS) and (deep_scans_done < MAX_DEEP_SCAN_GAMES_PER_RUN):
             extra_markets = []
             if SCAN_HALVES_QUARTERS:
@@ -1468,7 +1421,6 @@ def scan_all_fanduel_markets():
             ev_url = f"https://api.the-odds-api.com/v4/sports/basketball_nba/events/{event_id}/odds"
             ev_params = {
                 "apiKey": THE_ODDS_API_KEY,
-                "regions": "us",
                 "markets": ",".join(extra_markets),
                 "bookmakers": BOOKMAKERS_LIST,
                 "oddsFormat": "american"
@@ -1495,6 +1447,180 @@ def scan_all_fanduel_markets():
                 reg_q1_tot = PERIOD_TOTAL_SHRINKAGE * raw_q1_tot + (1.0 - PERIOD_TOTAL_SHRINKAGE) * (avg_q1_off * 2.0)
                 reg_h1_tot = PERIOD_TOTAL_SHRINKAGE * raw_h1_tot + (1.0 - PERIOD_TOTAL_SHRINKAGE) * (avg_h1_off * 2.0)
 
+                # --- B1. 1ST QUARTER STARTER PROPS (RUNS FIRST SO 1-PROP/PLAYER CAP PRIORITIZES 1Q) ---
+                if SCAN_Q1_PLAYER_PROPS:
+                    q1_stat_map = {
+                        "player_points_q1": "PTS",
+                        "player_rebounds_q1": "REB",
+                        "player_assists_q1": "AST"
+                    }
+                    q1_board = {}
+                    for b in all_ev_books:
+                        b_key = b.get("key", "")
+                        if b_key not in PLAYABLE_US_BOOKS:
+                            continue
+                        for m in b.get("markets", []):
+                            m_key = m.get("key", "")
+                            if m_key not in q1_stat_map:
+                                continue
+                            stat_code = q1_stat_map[m_key]
+                            for o in m.get("outcomes", []):
+                                p_name = o.get("description", "")
+                                side_name = o.get("name", "")
+                                if not p_name or side_name not in ["Over", "Under"] or "point" not in o:
+                                    continue
+                                norm_p = normalize_name(p_name)
+                                line_val = float(o["point"])
+                                price_val = int(o["price"])
+                                entry = q1_board.setdefault((m_key, norm_p), {"name": p_name, "offers": {}})
+                                entry["offers"].setdefault((b_key, line_val), {})[side_name] = price_val
+                                q1_offers_by_book[stat_code][b_key] = q1_offers_by_book[stat_code].get(b_key, 0) + 1
+
+                    # Collect per-player best 1Q prop so a player only gets 1 prop total across Q1 + FG
+                    player_q1_candidates = {}
+                    for (m_key, norm_p), entry in q1_board.items():
+                        stat_code = q1_stat_map[m_key]
+                        p_name = entry["name"]
+                        q1_filter_stats[stat_code]["raw_players"] += 1
+
+                        if norm_p in prop_excluded or norm_p not in player_db:
+                            continue
+                        if (today_ct_str, norm_p) in posted_players_today:
+                            continue
+
+                        p_info = player_db[norm_p]
+                        if not p_info.get("IS_STARTER", False):
+                            q1_filter_stats[stat_code]["not_starter"] += 1
+                            continue
+
+                        p_team = normalize_team_name(p_info.get("TEAM", ""))
+                        if p_team not in [home, away]:
+                            continue
+
+                        bet_key = f"{match_key}_{norm_p}_Q1_{stat_code}"
+                        if bet_key in already_posted:
+                            continue
+
+                        q1_logs = p_info.get(f"Q1_{stat_code}_L10", [])[-10:]
+                        if len(q1_logs) < MIN_Q1_L10_HITS:
+                            q1_filter_stats[stat_code]["low_logs"] += 1
+                            continue
+
+                        p_pos = p_info.get("POS", "G")
+                        usage_boost_mult, missing_team_impact, missing_team_mins = calc_teammate_usage_boost(
+                            norm_p, p_team, p_pos, stat_code, player_db, confirmed_out, questionable_gtd
+                        )
+
+                        if p_team == home:
+                            opp_team_name, opp_r, opp_ab_str = away, a_ranks, a_ab
+                        else:
+                            opp_team_name, opp_r, opp_ab_str = home, h_ranks, h_ab
+
+                        opp_def_rk = opp_r[stat_code]
+                        emp_pos_rk = pos_ranks.get(opp_team_name, {}).get(p_pos, {}).get(stat_code, opp_def_rk)
+                        blended_def_rk = int(round(0.50 * opp_def_rk + 0.50 * emp_pos_rk))
+
+                        qualifying_q1 = []
+                        saw_7_hits = False
+                        saw_playable_juice = False
+                        saw_non_red = False
+
+                        for (b_key, line), sides in entry["offers"].items():
+                            # Evaluate Over
+                            if "Over" in sides:
+                                over_hits = sum(1 for v in q1_logs if v > line)
+                                juice = sides["Over"]
+                                if over_hits >= MIN_Q1_L10_HITS:
+                                    saw_7_hits = True
+                                    if juice >= MAX_Q1_PROP_JUICE:
+                                        saw_playable_juice = True
+                                        dot = get_matchup_dot(blended_def_rk, "Over")
+                                        if dot != "🔴":
+                                            saw_non_red = True
+                                            comp_books = [bk for bk in all_ev_books if bk.get("key") != b_key]
+                                            mkt_cons, mkt_prob = get_devigged_total_or_prop_consensus(comp_books, m_key, "Over", line, p_name)
+                                            if mkt_cons is None or (mkt_cons - line) > -1.0:
+                                                is_fd = 1 if b_key == "fanduel" else 0
+                                                qualifying_q1.append((is_fd, over_hits, juice, b_key, line, "Over", dot, mkt_prob))
+
+                            # Evaluate Under
+                            if "Under" in sides:
+                                under_hits = sum(1 for v in q1_logs if v < line)
+                                juice = sides["Under"]
+                                if under_hits >= MIN_Q1_L10_HITS:
+                                    saw_7_hits = True
+                                    if juice >= MAX_Q1_PROP_JUICE:
+                                        saw_playable_juice = True
+                                        if not (usage_boost_mult >= 1.03 or missing_team_mins >= 22.0 or missing_team_impact >= 25.0):
+                                            dot = get_matchup_dot(blended_def_rk, "Under")
+                                            if dot != "🔴":
+                                                saw_non_red = True
+                                                comp_books = [bk for bk in all_ev_books if bk.get("key") != b_key]
+                                                mkt_cons, mkt_prob = get_devigged_total_or_prop_consensus(comp_books, m_key, "Under", line, p_name)
+                                                if mkt_cons is None or (mkt_cons - line) < 1.0:
+                                                    is_fd = 1 if b_key == "fanduel" else 0
+                                                    qualifying_q1.append((is_fd, under_hits, juice, b_key, line, "Under", dot, mkt_prob))
+
+                        if not qualifying_q1:
+                            if not saw_7_hits:
+                                q1_filter_stats[stat_code]["lt_7_hits"] += 1
+                            elif not saw_playable_juice:
+                                q1_filter_stats[stat_code]["heavy_juice"] += 1
+                            elif not saw_non_red:
+                                q1_filter_stats[stat_code]["red_dot"] += 1
+                            else:
+                                q1_filter_stats[stat_code]["cons_or_inj"] += 1
+                            continue
+
+                        _, hits, juice, best_book, line, pick_dir, dot, mkt_prob = max(
+                            qualifying_q1, key=lambda x: (x[0], x[1], x[2])
+                        )
+
+                        n_games = len(q1_logs)
+                        hit_rate = hits / float(n_games)
+                        q1_avg = float(np.mean(q1_logs))
+                        est_win_prob = (0.70 * hit_rate + 0.30 * mkt_prob) if mkt_prob is not None else (0.82 * hit_rate)
+                        units = calc_kelly_units(est_win_prob, juice, max_units=1.5)
+                        usage_tag = " ⚡+Usage" if (usage_boost_mult >= 1.03 and pick_dir == "Over") else ""
+                        book_tag = "" if best_book == "fanduel" else f" • {BOOK_LABELS.get(best_book, best_book.upper())}"
+
+                        base_text = (
+                            f"**{p_name} — 1Q {pick_dir} {line} {stat_code}** `({juice:+d}{book_tag})`\n"
+                            f"🎯 **L{n_games} Hit Rate: {hits}/{n_games} ({hit_rate*100:.0f}%)** `({units:.1f}u)`  •  📊 1Q Avg: **{q1_avg:.1f}**\n"
+                            f"{dot} vs {opp_ab_str} Def: **#{opp_def_rk}** *({p_pos}: #{emp_pos_rk})*{usage_tag}  •  🏀 {a_ab}@{h_ab} *({time_short})*\n"
+                            f"{DIVIDER}"
+                        )
+                        payload = {
+                            "bet_key": bet_key,
+                            "away": away,
+                            "home": home,
+                            "market": "PLAYER_PROP_Q1",
+                            "player": p_name,
+                            "player_team": p_team,
+                            "stat": stat_code,
+                            "line": line,
+                            "pick_dir": pick_dir,
+                            "juice": juice,
+                            "units": units,
+                            "dot": dot,
+                            "book": best_book,
+                            "base_text": base_text,
+                            "status": "PENDING"
+                        }
+                        # Rank by hit rate then juice if player qualifies for multiple 1Q stats
+                        player_q1_candidates.setdefault(norm_p, []).append((hit_rate, juice, stat_code, base_text, payload))
+
+                    for norm_p, cand_list in player_q1_candidates.items():
+                        _, _, best_stat, best_text, best_payload = max(cand_list, key=lambda x: (x[0], x[1]))
+                        msg_id = post_alert_to_discord(best_text)
+                        if msg_id:
+                            best_payload["message_id"] = msg_id
+                            tracked_bets.append(best_payload)
+                            already_posted.add(best_payload["bet_key"])
+                            posted_players_today.add((today_ct_str, norm_p))
+                            q1_filter_stats[best_stat]["posted"] += 1
+
+                # --- B2. PERIOD TOTALS / SPREADS & FULL-GAME 7/10 SNIPER PROPS ---
                 for m in fd_ev_markets:
                     m_key = m["key"]
 
@@ -1523,12 +1649,12 @@ def scan_all_fanduel_markets():
                                 continue
 
                             stat_win_prob = norm.cdf(abs(diff) / std_dev)
-                            win_prob = (0.80 * stat_win_prob + 0.20 * mkt_prob) if mkt_prob is not None else stat_win_prob
+                            win_prob = (0.75 * stat_win_prob + 0.25 * mkt_prob) if mkt_prob is not None else stat_win_prob
                             edge = win_prob - american_to_implied_prob(juice)
 
                             if edge >= MIN_EDGE_TEAM_MARKETS:
                                 ev_pct = edge * 100.0
-                                units = calc_kelly_units(win_prob, juice)
+                                units = calc_kelly_units(win_prob, juice, max_units=2.0)
                                 mkt_str = f" *(Mkt: {mkt_cons:.1f})*" if mkt_cons is not None else ""
                                 base_text = (
                                     f"**{a_ab} @ {h_ab} — {period_label} {pick_dir} {line}** `({juice:+d})`\n"
@@ -1566,7 +1692,7 @@ def scan_all_fanduel_markets():
 
                             mkt_p_home, _ = get_devigged_spread_consensus(other_ev_books, m_key, home, h_line)
                             mkt_p_anchor = -(mkt_p_home if mkt_p_home is not None else h_line)
-                            p_margin = 0.80 * stat_p_margin + 0.20 * mkt_p_anchor
+                            p_margin = 0.75 * stat_p_margin + 0.25 * mkt_p_anchor
 
                             sp_diff = p_margin - (-h_line)
                             max_p_dislocation = 2.5 if is_q1 else 3.8
@@ -1589,12 +1715,12 @@ def scan_all_fanduel_markets():
                                 continue
 
                             stat_win_prob = norm.cdf(abs(sp_diff) / std_dev)
-                            win_prob = (0.80 * stat_win_prob + 0.20 * mkt_prob) if mkt_prob is not None else stat_win_prob
+                            win_prob = (0.75 * stat_win_prob + 0.25 * mkt_prob) if mkt_prob is not None else stat_win_prob
                             edge = win_prob - american_to_implied_prob(juice)
 
                             if edge >= MIN_EDGE_TEAM_MARKETS:
                                 ev_pct = edge * 100.0
-                                units = calc_kelly_units(win_prob, juice)
+                                units = calc_kelly_units(win_prob, juice, max_units=2.0)
                                 fair_p = -p_margin if pick_team == home else p_margin
                                 mkt_str = f" *(Mkt: {mkt_cons:+.1f})*" if mkt_cons is not None else ""
                                 base_text = (
@@ -1629,15 +1755,27 @@ def scan_all_fanduel_markets():
                             if norm_p in prop_excluded or norm_p not in player_db or "Over" not in sides or "Under" not in sides:
                                 continue
 
-                            # 1 Full-Game Prop Cap Per Player
-                            has_posted_player_fg_prop = any(
-                                f"{match_key}_{norm_p}_{sfx}" in already_posted
-                                for sfx in ["PTS", "REB", "AST", "PRA", "3PM"]
-                            )
-                            if has_posted_player_fg_prop:
+                            # Cross-Market 1-Prop-Per-Player Cap (FG + 1Q combined)
+                            if (today_ct_str, norm_p) in posted_players_today:
+                                continue
+
+                            p_info = player_db[norm_p]
+                            # V15 Core Starter Gate: Verified normal starter averaging 24.0+ MPG
+                            szn_min = p_info.get("SZN_MIN", 0.0)
+                            if not p_info.get("IS_STARTER", False) or szn_min < MIN_FG_PROP_AVG_MINUTES:
+                                continue
+
+                            p_team = normalize_team_name(p_info.get("TEAM", ""))
+                            if p_team not in [home, away]:
+                                continue
+                            # Max 1 FG Prop Per Team
+                            if (today_ct_str, p_team) in posted_fg_teams_today:
                                 continue
 
                             bet_key = f"{match_key}_{norm_p}_{stat_code}"
+                            if bet_key in already_posted:
+                                continue
+
                             line = float(sides["Over"]["point"])
                             if stat_code == "PTS" and line < MIN_PROP_LINE_PTS:
                                 continue
@@ -1648,20 +1786,17 @@ def scan_all_fanduel_markets():
                             elif stat_code == "PRA" and line < 14.5:
                                 continue
 
-                            p_info = player_db[norm_p]
+                            fg_logs = p_info.get(f"FG_{stat_code}_L10", [])[-10:]
+                            if len(fg_logs) < MIN_FG_PROP_L10_HITS:
+                                continue
+
                             base_avg = p_info.get(stat_code, 0.0)
                             if base_avg <= 0.0:
                                 continue
                             szn_avg = p_info.get(f"SZN_{stat_code}", base_avg)
                             l10_avg = p_info.get(f"L10_{stat_code}", base_avg)
-                            szn_min = p_info.get("SZN_MIN", 24.0)
-                            l5_min = p_info.get("L5_MIN", szn_min)
-                            l3_min = p_info.get("L3_MIN", l5_min)
+                            median_l5_min = p_info.get("MEDIAN_L5_MIN", szn_min)
                             p_pos = p_info.get("POS", "G")
-                            p_team = normalize_team_name(p_info.get("TEAM", ""))
-
-                            if p_team not in [home, away]:
-                                continue
 
                             # --- 1. TRUE SINGLE-OPPONENT + EMPIRICAL DvP (G/F/C) MAPPING ---
                             dvp_stat_key = "PTS" if stat_code in ["PTS", "3PM", "PRA"] else stat_code
@@ -1686,15 +1821,16 @@ def scan_all_fanduel_markets():
                             matchup_mult = (0.50 * team_def_mult) + (0.50 * emp_pos_mult)
                             blended_def_rk = int(round(0.50 * opp_def_rk + 0.50 * emp_pos_rk))
 
-                            # --- 2. L3/L5 MINUTE COMPRESSION & USAGE BOOST ---
-                            recent_min = min(l5_min, l3_min)
-                            min_ratio = recent_min / max(12.0, szn_min)
-                            if min_ratio < 0.92:
-                                min_weight_mult = float(np.clip(min_ratio, 0.70, 0.92))
+                            # --- 2. MEDIAN L5 MINUTES (BLOWOUT-PROOF) & FRESH-INJURY USAGE BOOST (+6% CAP) ---
+                            min_ratio = median_l5_min / max(12.0, szn_min)
+                            if min_ratio < 0.90:
+                                min_weight_mult = float(np.clip(min_ratio, 0.80, 0.92))
                             else:
-                                min_weight_mult = 0.50 + 0.50 * float(np.clip(l5_min / max(12.0, szn_min), 0.92, 1.12))
+                                min_weight_mult = 0.50 + 0.50 * float(np.clip(min_ratio, 0.90, 1.10))
 
-                            usage_boost_mult, missing_team_impact, missing_team_mins = calc_teammate_usage_boost(norm_p, p_team, p_pos, stat_code, player_db, confirmed_out, questionable_gtd)
+                            usage_boost_mult, missing_team_impact, missing_team_mins = calc_teammate_usage_boost(
+                                norm_p, p_team, p_pos, stat_code, player_db, confirmed_out, questionable_gtd
+                            )
 
                             pace_mult = exp_pace / avg_pace
                             lambda_proj = base_avg * (0.75 * matchup_mult + 0.25 * pace_mult) * min_weight_mult * usage_boost_mult
@@ -1705,13 +1841,23 @@ def scan_all_fanduel_markets():
                                 elif fg_spread_abs >= 8.5:
                                     lambda_proj *= 0.96
 
-                            # --- 3. OVERDISPERSED SCORING MATH (PTS/PRA) vs POISSON (REB/AST/3PM) ---
-                            if stat_code in ["PTS", "PRA"]:
-                                std_pts = 1.42 * np.sqrt(max(4.0, lambda_proj))
-                                prob_under = norm.cdf(line, loc=lambda_proj, scale=std_pts)
+                            # --- 3. WIDENED REALISTIC VARIANCE (OVERDISPERSED NBA DISTRIBUTIONS) ---
+                            if stat_code == "PRA":
+                                std_val = 1.85 * np.sqrt(max(6.0, lambda_proj))
+                                prob_under = norm.cdf(line, loc=lambda_proj, scale=std_val)
+                                prob_over = 1.0 - prob_under
+                            elif stat_code == "PTS":
+                                std_val = 1.60 * np.sqrt(max(4.0, lambda_proj))
+                                prob_under = norm.cdf(line, loc=lambda_proj, scale=std_val)
+                                prob_over = 1.0 - prob_under
+                            elif stat_code in ["REB", "AST"]:
+                                std_val = 1.22 * np.sqrt(max(2.0, lambda_proj))
+                                prob_under = norm.cdf(line, loc=lambda_proj, scale=std_val)
                                 prob_over = 1.0 - prob_under
                             else:
-                                prob_under = poisson.cdf(int(np.floor(line)), lambda_proj)
+                                p_under_pois = poisson.cdf(int(np.floor(line)), lambda_proj)
+                                p_under_norm = norm.cdf(line, loc=lambda_proj, scale=1.20 * np.sqrt(max(1.0, lambda_proj)))
+                                prob_under = 0.50 * p_under_pois + 0.50 * p_under_norm
                                 prob_over = 1.0 - prob_under
 
                             if prob_over >= prob_under:
@@ -1719,33 +1865,43 @@ def scan_all_fanduel_markets():
                             else:
                                 pick_dir, stat_win_prob, juice = "Under", prob_under, int(sides["Under"]["price"])
 
-                            if pick_dir == "Over" and min_ratio <= 0.85 and usage_boost_mult < 1.04:
+                            # Block heavy juice (-141 or worse)
+                            if juice < MAX_FG_PROP_JUICE:
                                 continue
 
-                            # --- 4. SPOT-STARTER / STAR-ABSENCE / PRA-JUMP UNDER SAFEGUARD ---
+                            # --- 4. V15 STRICT 7/10 L10 HIT-RATE SNIPER GATE ---
+                            fg_hits = sum(1 for v in fg_logs if (v > line if pick_dir == "Over" else v < line))
+                            if fg_hits < MIN_FG_PROP_L10_HITS:
+                                continue
+
+                            if pick_dir == "Over" and min_ratio <= 0.85 and usage_boost_mult < 1.03:
+                                continue
+
+                            # --- 5. SPOT-STARTER / FRESH STAR-ABSENCE / PRA-JUMP UNDER SAFEGUARD ---
                             if is_spot_starter_under_trap(pick_dir, stat_code, line, szn_avg, l10_avg, szn_min, usage_boost_mult, missing_team_impact, missing_team_mins):
                                 continue
 
-                            # --- 5. DE-VIGGED MULTI-BOOK CONSENSUS & JUICE CHECK ---
+                            # --- 6. PINNACLE-WEIGHTED 60/40 MARKET BLEND & JUICE GUARD ---
                             mkt_cons, mkt_prob = get_devigged_total_or_prop_consensus(other_ev_books, m_key, pick_dir, line, p_name)
                             if mkt_cons is not None:
-                                if (pick_dir == "Over" and (mkt_cons - line) <= -1.5) or (pick_dir == "Under" and (mkt_cons - line) >= 1.5):
+                                if (pick_dir == "Over" and (mkt_cons - line) <= -1.0) or (pick_dir == "Under" and (mkt_cons - line) >= 1.0):
                                     continue
-                            if mkt_prob is not None and mkt_prob < 0.45:
+                            if mkt_prob is not None and mkt_prob < 0.49:
                                 continue
 
-                            win_prob = (0.80 * stat_win_prob + 0.20 * mkt_prob) if mkt_prob is not None else stat_win_prob
+                            win_prob = (0.60 * stat_win_prob + 0.40 * mkt_prob) if mkt_prob is not None else (0.85 * stat_win_prob)
                             edge = win_prob - american_to_implied_prob(juice)
                             if edge >= MIN_EDGE_PLAYER_PROPS:
                                 dot = get_matchup_dot(blended_def_rk, pick_dir)
                                 if dot == "🔴":
                                     continue
                                 ev_pct = edge * 100.0
-                                units = calc_kelly_units(win_prob, juice)
-                                usage_tag = " ⚡+Usage" if (usage_boost_mult >= 1.04 and pick_dir == "Over") else ""
+                                units = calc_kelly_units(win_prob, juice, max_units=MAX_FG_PROP_UNITS)
+                                usage_tag = " ⚡+Usage" if (usage_boost_mult >= 1.03 and pick_dir == "Over") else ""
+                                n_fg = len(fg_logs)
                                 base_text = (
                                     f"**{p_name} — {pick_dir} {line} {stat_code}** `({juice:+d})`\n"
-                                    f"🔥 **+{ev_pct:.1f}% EV** `({units:.1f}u)`  •  📊 Szn: **{szn_avg:.1f}** *(L10: {l10_avg:.1f} | Proj: {lambda_proj:.1f})*\n"
+                                    f"🔥 **+{ev_pct:.1f}% EV** `({units:.1f}u)`  •  🎯 **L{n_fg}: {fg_hits}/{n_fg}**  •  📊 Proj: **{lambda_proj:.1f}** *(Szn: {szn_avg:.1f} | L10: {l10_avg:.1f})*\n"
                                     f"{dot} vs {opp_ab_str} Def: **#{opp_def_rk}** *({p_pos}: #{emp_pos_rk})*{usage_tag}  •  🏀 {a_ab}@{h_ab} *({time_short})*\n"
                                     f"{DIVIDER}"
                                 )
@@ -1755,6 +1911,7 @@ def scan_all_fanduel_markets():
                                     "home": home,
                                     "market": "PLAYER_PROP",
                                     "player": p_name,
+                                    "player_team": p_team,
                                     "stat": stat_code,
                                     "line": line,
                                     "pick_dir": pick_dir,
@@ -1764,153 +1921,7 @@ def scan_all_fanduel_markets():
                                     "base_text": base_text,
                                     "status": "PENDING"
                                 }
-                                player_fg_prop_candidates.setdefault(norm_p, []).append((edge, base_text, payload))
-
-                # --- D. MULTI-BOOK 1ST QUARTER STARTER PROPS (PTS, REB, AST — 7+/10 L10) ---
-                # Checks FanDuel first (including one-way Overs), then falls back to DK/MGM/CZR/ESPN/BR
-                if SCAN_Q1_PLAYER_PROPS:
-                    q1_stat_map = {
-                        "player_points_q1": "PTS",
-                        "player_rebounds_q1": "REB",
-                        "player_assists_q1": "AST"
-                    }
-                    # Structure: q1_board[(m_key, norm_p)] = {"name": p_name, "offers": {(book_key, line): {"Over": price, "Under": price}}}
-                    q1_board = {}
-                    for b in all_ev_books:
-                        b_key = b.get("key", "")
-                        for m in b.get("markets", []):
-                            m_key = m.get("key", "")
-                            if m_key not in q1_stat_map:
-                                continue
-                            stat_code = q1_stat_map[m_key]
-                            for o in m.get("outcomes", []):
-                                p_name = o.get("description", "")
-                                side_name = o.get("name", "")
-                                if not p_name or side_name not in ["Over", "Under"] or "point" not in o:
-                                    continue
-                                norm_p = normalize_name(p_name)
-                                line_val = float(o["point"])
-                                price_val = int(o["price"])
-                                entry = q1_board.setdefault((m_key, norm_p), {"name": p_name, "offers": {}})
-                                entry["offers"].setdefault((b_key, line_val), {})[side_name] = price_val
-                                q1_offers_seen[stat_code] += 1
-
-                    for (m_key, norm_p), entry in q1_board.items():
-                        stat_code = q1_stat_map[m_key]
-                        p_name = entry["name"]
-                        if norm_p in prop_excluded or norm_p not in player_db:
-                            continue
-
-                        p_info = player_db[norm_p]
-                        if not p_info.get("IS_STARTER", False):
-                            continue
-
-                        p_team = normalize_team_name(p_info.get("TEAM", ""))
-                        if p_team not in [home, away]:
-                            continue
-
-                        bet_key = f"{match_key}_{norm_p}_Q1_{stat_code}"
-                        if bet_key in already_posted:
-                            continue
-
-                        q1_logs = p_info.get(f"Q1_{stat_code}_L10", [])[-10:]
-                        if len(q1_logs) < MIN_Q1_L10_HITS:
-                            continue
-
-                        p_pos = p_info.get("POS", "G")
-                        usage_boost_mult, missing_team_impact, missing_team_mins = calc_teammate_usage_boost(
-                            norm_p, p_team, p_pos, stat_code, player_db, confirmed_out, questionable_gtd
-                        )
-
-                        if p_team == home:
-                            opp_team_name, opp_r, opp_ab_str = away, a_ranks, a_ab
-                        else:
-                            opp_team_name, opp_r, opp_ab_str = home, h_ranks, h_ab
-
-                        opp_def_rk = opp_r[stat_code]
-                        emp_pos_rk = pos_ranks.get(opp_team_name, {}).get(p_pos, {}).get(stat_code, opp_def_rk)
-                        blended_def_rk = int(round(0.50 * opp_def_rk + 0.50 * emp_pos_rk))
-
-                        qualifying_q1 = []
-                        for (b_key, line), sides in entry["offers"].items():
-                            # Evaluate Over if posted
-                            if "Over" in sides:
-                                over_hits = sum(1 for v in q1_logs if v > line)
-                                juice = sides["Over"]
-                                if over_hits >= MIN_Q1_L10_HITS and juice >= MAX_Q1_PROP_JUICE:
-                                    dot = get_matchup_dot(blended_def_rk, "Over")
-                                    if dot != "🔴":
-                                        comp_books = [bk for bk in all_ev_books if bk.get("key") != b_key]
-                                        mkt_cons, mkt_prob = get_devigged_total_or_prop_consensus(comp_books, m_key, "Over", line, p_name)
-                                        if mkt_cons is None or (mkt_cons - line) > -1.0:
-                                            is_fd = 1 if b_key == "fanduel" else 0
-                                            qualifying_q1.append((is_fd, over_hits, juice, b_key, line, "Over", dot, mkt_prob))
-
-                            # Evaluate Under if posted
-                            if "Under" in sides:
-                                under_hits = sum(1 for v in q1_logs if v < line)
-                                juice = sides["Under"]
-                                if under_hits >= MIN_Q1_L10_HITS and juice >= MAX_Q1_PROP_JUICE:
-                                    if not (usage_boost_mult >= 1.05 or missing_team_mins >= 22.0 or missing_team_impact >= 25.0):
-                                        dot = get_matchup_dot(blended_def_rk, "Under")
-                                        if dot != "🔴":
-                                            comp_books = [bk for bk in all_ev_books if bk.get("key") != b_key]
-                                            mkt_cons, mkt_prob = get_devigged_total_or_prop_consensus(comp_books, m_key, "Under", line, p_name)
-                                            if mkt_cons is None or (mkt_cons - line) < 1.0:
-                                                is_fd = 1 if b_key == "fanduel" else 0
-                                                qualifying_q1.append((is_fd, under_hits, juice, b_key, line, "Under", dot, mkt_prob))
-
-                        if not qualifying_q1:
-                            continue
-
-                        # Prioritize FanDuel first, then highest L10 hits, then best American odds
-                        _, hits, juice, best_book, line, pick_dir, dot, mkt_prob = max(
-                            qualifying_q1, key=lambda x: (x[0], x[1], x[2])
-                        )
-
-                        n_games = len(q1_logs)
-                        hit_rate = hits / float(n_games)
-                        q1_avg = float(np.mean(q1_logs))
-                        est_win_prob = (0.75 * hit_rate + 0.25 * mkt_prob) if mkt_prob is not None else (0.85 * hit_rate)
-                        units = calc_kelly_units(est_win_prob, juice)
-                        usage_tag = " ⚡+Usage" if (usage_boost_mult >= 1.04 and pick_dir == "Over") else ""
-                        book_tag = "" if best_book == "fanduel" else f" • {BOOK_LABELS.get(best_book, best_book.upper())}"
-
-                        base_text = (
-                            f"**{p_name} — 1Q {pick_dir} {line} {stat_code}** `({juice:+d}{book_tag})`\n"
-                            f"🎯 **L{n_games} Hit Rate: {hits}/{n_games} ({hit_rate*100:.0f}%)** `({units:.1f}u)`  •  📊 1Q Avg: **{q1_avg:.1f}**\n"
-                            f"{dot} vs {opp_ab_str} Def: **#{opp_def_rk}** *({p_pos}: #{emp_pos_rk})*{usage_tag}  •  🏀 {a_ab}@{h_ab} *({time_short})*\n"
-                            f"{DIVIDER}"
-                        )
-                        msg_id = post_alert_to_discord(base_text)
-                        if msg_id:
-                            tracked_bets.append({
-                                "bet_key": bet_key,
-                                "message_id": msg_id,
-                                "away": away,
-                                "home": home,
-                                "market": "PLAYER_PROP_Q1",
-                                "player": p_name,
-                                "stat": stat_code,
-                                "line": line,
-                                "pick_dir": pick_dir,
-                                "juice": juice,
-                                "units": units,
-                                "dot": dot,
-                                "book": best_book,
-                                "base_text": base_text,
-                                "status": "PENDING"
-                            })
-                            already_posted.add(bet_key)
-
-                # --- POST SINGLE HIGHEST-EV FULL-GAME PROP PER PLAYER ---
-                for norm_p, cand_list in player_fg_prop_candidates.items():
-                    best_edge, best_text, best_payload = max(cand_list, key=lambda x: x[0])
-                    msg_id = post_alert_to_discord(best_text)
-                    if msg_id:
-                        best_payload["message_id"] = msg_id
-                        tracked_bets.append(best_payload)
-                        already_posted.add(best_payload["bet_key"])
+                                slate_fg_prop_candidates.append((edge, norm_p, p_team, base_text, payload))
 
         # --- C. POST SINGLE HIGHEST-EV TOTAL FOR THIS GAME (FG vs 1H vs 1Q) ---
         if game_total_candidates and not has_posted_game_total:
@@ -1921,7 +1932,47 @@ def scan_all_fanduel_markets():
                 tracked_bets.append(best_payload)
                 already_posted.add(best_payload["bet_key"])
 
-    print(f"🎯 1Q Prop Offers Scanned Across All Books — PTS: {q1_offers_seen['PTS']} | REB: {q1_offers_seen['REB']} | AST: {q1_offers_seen['AST']}")
+    # --- D. POST TOP SNIPER FULL-GAME PROPS (1/PLAYER, 1/TEAM, MAX 5/DAY) ---
+    remaining_fg_slots = max(0, MAX_FG_PROPS_PER_DAY - posted_fg_props_today_count)
+    if slate_fg_prop_candidates and remaining_fg_slots > 0:
+        # 1. Best single FG prop per player (excluding anyone who got a 1Q prop)
+        best_by_player = {}
+        for item in slate_fg_prop_candidates:
+            edge, norm_p, p_team, base_text, payload = item
+            if (today_ct_str, norm_p) in posted_players_today or (today_ct_str, p_team) in posted_fg_teams_today:
+                continue
+            if norm_p not in best_by_player or edge > best_by_player[norm_p][0]:
+                best_by_player[norm_p] = item
+
+        # 2. Best single FG prop per team
+        best_by_team = {}
+        for item in best_by_player.values():
+            edge, norm_p, p_team, base_text, payload = item
+            if p_team not in best_by_team or edge > best_by_team[p_team][0]:
+                best_by_team[p_team] = item
+
+        # 3. Sort across entire slate by highest EV and cap at remaining daily slots
+        top_fg_plays = sorted(best_by_team.values(), key=lambda x: x[0], reverse=True)[:remaining_fg_slots]
+        for edge, norm_p, p_team, base_text, payload in top_fg_plays:
+            msg_id = post_alert_to_discord(base_text)
+            if msg_id:
+                payload["message_id"] = msg_id
+                tracked_bets.append(payload)
+                already_posted.add(payload["bet_key"])
+                posted_players_today.add((today_ct_str, norm_p))
+                posted_fg_teams_today.add((today_ct_str, p_team))
+
+    # Print 1Q Diagnostic Summary to GitHub Actions Logs
+    for stat_k in ["PTS", "REB", "AST"]:
+        books_str = ", ".join(f"{BOOK_LABELS.get(bk, bk)}:{cnt}" for bk, cnt in sorted(q1_offers_by_book[stat_k].items())) or "None"
+        st = q1_filter_stats[stat_k]
+        print(
+            f"🎯 1Q {stat_k} Audit — Books: [{books_str}] | "
+            f"Players:{st['raw_players']} -> Posted:{st['posted']} "
+            f"(NoStart:{st['not_starter']}, LowLogs:{st['low_logs']}, <7/10:{st['lt_7_hits']}, "
+            f"Juice<-165:{st['heavy_juice']}, Red:{st['red_dot']}, Cons/Inj:{st['cons_or_inj']})"
+        )
+
     save_json(TRACKER_FILE, tracked_bets)
 
 def post_daily_recaps_if_complete(tracked_bets):
@@ -2144,12 +2195,12 @@ def check_scores_and_grade_all_markets():
 
 if __name__ == "__main__":
     if "--grade-only" in sys.argv:
-        print("🏁 Running V14 Overnight Grading & Daily Recap Check...")
+        print("🏁 Running V15 Overnight Grading & Daily Recap Check...")
         check_scores_and_grade_all_markets()
         print("✅ Grading pass complete.")
         sys.exit(0)
 
-    print("🤖 LIVE NBA EV BOT (V14: MULTI-BOOK 1Q PTS/REB/AST + V13 GUARDS) IS LIVE!")
+    print("🤖 LIVE NBA EV BOT (V15: 7/10 SNIPER + PINNACLE 10-BOOK + 1Q AUDIT) IS LIVE!")
     start_ts = time.time()
     last_scan = 0
     while (time.time() - start_ts) < MAX_RUNTIME_SECONDS:

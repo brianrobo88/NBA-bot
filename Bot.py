@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 import pytz
 
 # ==========================================
-# 1. CREDENTIALS & V15 SNIPER CONFIGURATION
+# 1. CREDENTIALS & V16 CONFIGURATION
 # ==========================================
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
 
@@ -25,18 +25,20 @@ THE_ODDS_API_KEY = (
 # Market Toggles
 SCAN_FULL_GAME = True         # Full-Game Spreads & Totals
 SCAN_HALVES_QUARTERS = True   # 1st Half & 1st Quarter Spreads & Totals
-SCAN_PLAYER_PROPS = True      # Core Starters Only: PTS, REB, AST, PRA, 3PM (7/10 L10 Sniper)
+SCAN_PLAYER_PROPS = True      # Core Starters Only: PTS, REB, AST, PRA, 3PM (Matchup + Form)
 SCAN_PRA_AND_3PM = True       # Scans PRA & 3PM alongside PTS/REB/AST
 SCAN_Q1_PLAYER_PROPS = True   # 1st Quarter Starter Props: PTS, REB, AST (7/10 L10 Filter)
 
-# Calibrated EV, Hit-Rate, Juice & Volume Controls
-MIN_EDGE_TEAM_MARKETS = 0.110 # 11.0% Minimum EV for Full-Game & 1Q/1H Spreads and Totals
-MIN_EDGE_PLAYER_PROPS = 0.080 # 8.0% Calibrated EV (60/40 Pinnacle blend + widened std dev + 7/10 L10 gate)
-MIN_FG_PROP_L10_HITS = 7      # Requires >= 7 hits in Last 10 games for Full-Game Props
-MIN_Q1_L10_HITS = 7           # Requires >= 7 hits in Last 10 games for 1Q Starter Props
+# Calibrated EV, Dislocation, Hit-Rate, Juice & Volume Controls
+MIN_EDGE_TEAM_MARKETS = 0.110 # 11.0% EV for FG Spreads & 1Q/1H Markets (75/25 blend)
+MIN_EDGE_FG_TOTAL = 0.050     # 5.0% Calibrated EV for FG Totals (60/40 Pinnacle blend + 6.5-pt cap)
+MAX_FG_TOTAL_DISLOCATION = 6.5 # Blocks FG Totals disagreeing with consensus by > 6.5 pts
+MIN_EDGE_PLAYER_PROPS = 0.065 # 6.5% Calibrated EV for FG Props (60/40 Pinnacle blend + 22% gap cap)
+MAX_FG_PROP_GAP_PCT = 0.22    # Blocks FG Props where projection deviates > 22% from line
+MIN_Q1_L10_HITS = 7           # Strictly for 1Q Starter Props (>= 7 hits in Last 10 games)
 MAX_FG_PROP_JUICE = -140      # Blocks heavily juiced FG props (e.g., -146)
 MAX_Q1_PROP_JUICE = -165      # Blocks heavily juiced 1Q props (e.g., -210, -550)
-MAX_FG_PROPS_PER_DAY = 5      # Caps daily slate to top 5 highest-EV FG sniper props
+MAX_FG_PROPS_PER_DAY = 5      # Caps daily slate to top 5 highest-EV FG props
 MAX_FG_PROP_UNITS = 1.0       # Caps FG prop Kelly sizing at 1.0u max
 
 # 10 Valid Bookmakers across US / US2 / EU = exactly 1 region credit in The Odds API
@@ -63,7 +65,7 @@ BOOK_LABELS = {
 }
 
 MAX_DEEP_SCAN_GAMES_PER_RUN = 15 # Scans full slate (up to 15 games) per pass
-LOOKBACK_DAYS_FOR_STATS = 30     # 30-day window ensures full 10-game (L10) logs for starters
+LOOKBACK_DAYS_FOR_STATS = 30     # 30-day window ensures full 10-game (L10) & split logs
 
 # Minimum Prop Line & Minutes Filters
 MIN_PROP_LINE_PTS = 7.5
@@ -75,7 +77,7 @@ MIN_STARTER_AVG_MINUTES = 22.0   # Verified starter threshold for 1Q props
 TRACKER_FILE = "tracked_all_markets.json"
 LIVE_STATS_CACHE_FILE = "live_nba_stats_cache.json"
 RECAP_POSTED_FILE = "daily_recaps_posted.json"
-CACHE_SCHEMA_VERSION = "v15_sniper_7of10_pinnacle_10books"
+CACHE_SCHEMA_VERSION = "v16_live_splits_pace_dvp_fg_props"
 
 SCORE_CHECK_SECONDS = 300     # Checks ESPN scores every 5 mins (FREE)
 FANDUEL_SCAN_SECONDS = 2700   # Rescans lines & injury reports every 45 mins until tip-off
@@ -308,6 +310,68 @@ def get_devigged_spread_consensus(other_books, market_key, pick_team, fd_line):
     avg_prob = float(np.average(devig_probs, weights=probs_w)) if devig_probs else None
     return avg_line, avg_prob
 
+def extract_game_pace_48(sum_data, reg_scale):
+    """
+    Computes 48-minute-normalized NBA possessions (FGA + 0.44*FTA - OREB + TO)
+    from ESPN's team boxscore (falling back to summing player boxscores if needed).
+    """
+    poss_list = []
+    for tb in sum_data.get("boxscore", {}).get("teams", []):
+        s_map = {s.get("name", ""): str(s.get("displayValue", "")) for s in tb.get("statistics", [])}
+        fg_str = s_map.get("fieldGoalsMade-fieldGoalsAttempted", "")
+        ft_str = s_map.get("freeThrowsMade-freeThrowsAttempted", "")
+        oreb_str = s_map.get("offensiveRebounds", "")
+        to_str = s_map.get("totalTurnovers") or s_map.get("turnovers", "")
+        if "-" in fg_str and "-" in ft_str:
+            try:
+                fga = float(fg_str.split("-")[1])
+                fta = float(ft_str.split("-")[1])
+                oreb = float(oreb_str) if oreb_str else 0.0
+                tov = float(to_str) if to_str else 0.0
+                poss = fga + (0.44 * fta) - oreb + tov
+                if 65.0 <= poss <= 135.0:
+                    poss_list.append(poss)
+            except:
+                continue
+
+    if len(poss_list) == 2:
+        return float(np.clip(np.mean(poss_list) * reg_scale, 88.0, 112.0))
+
+    # Fallback: sum player boxscores per team
+    poss_list = []
+    for tb in sum_data.get("boxscore", {}).get("players", []):
+        stat_blk = (tb.get("statistics") or [{}])[0]
+        labels = stat_blk.get("labels", [])
+        fg_idx = labels.index("FG") if "FG" in labels else -1
+        ft_idx = labels.index("FT") if "FT" in labels else -1
+        oreb_idx = labels.index("OREB") if "OREB" in labels else -1
+        to_idx = labels.index("TO") if "TO" in labels else -1
+        if fg_idx == -1 or ft_idx == -1:
+            continue
+        fga_sum, fta_sum, oreb_sum, to_sum = 0.0, 0.0, 0.0, 0.0
+        for ath in stat_blk.get("athletes", []):
+            s_vals = ath.get("stats", [])
+            if not s_vals or ath.get("didNotPlay"):
+                continue
+            try:
+                if "-" in str(s_vals[fg_idx]):
+                    fga_sum += float(str(s_vals[fg_idx]).split("-")[1])
+                if "-" in str(s_vals[ft_idx]):
+                    fta_sum += float(str(s_vals[ft_idx]).split("-")[1])
+                if oreb_idx != -1:
+                    oreb_sum += float(s_vals[oreb_idx])
+                if to_idx != -1:
+                    to_sum += float(s_vals[to_idx])
+            except:
+                continue
+        poss = fga_sum + (0.44 * fta_sum) - oreb_sum + to_sum
+        if 65.0 <= poss <= 135.0:
+            poss_list.append(poss)
+
+    if len(poss_list) == 2:
+        return float(np.clip(np.mean(poss_list) * reg_scale, 88.0, 112.0))
+    return None
+
 def extract_q1_player_stats_from_summary(sum_data):
     """
     Parses ESPN's play-by-play ('plays') array for Period 1 to compute exact
@@ -474,7 +538,7 @@ def get_fallback_player_baselines():
         "Franz Wagner": {"PTS": 25.1, "REB": 5.7, "AST": 8.4, "POS": "F", "TEAM": "Orlando Magic"},
         "Wendell Carter Jr": {"PTS": 10.8, "REB": 8.7, "AST": 2.1, "POS": "C", "TEAM": "Orlando Magic"},
         "Walker Kessler": {"PTS": 10.4, "REB": 10.7, "AST": 1.4, "POS": "C", "TEAM": "Utah Jazz"},
-        "LeBron James": {"PTS": 24.2, "REB": 7.4, "AST": 6.8, "POS": "F", "TEAM": "Los Angeles Lakers"},
+        "LeBron James": {"PTS": 24.2, "REB": 7.4, "AST": 6.8, "POS": "F", "TEAM": "Philadelphia 76ers"},
         "Luka Doncic": {"PTS": 37.2, "REB": 9.1, "AST": 7.7, "POS": "G", "TEAM": "Los Angeles Lakers"},
         "Austin Reaves": {"PTS": 24.7, "REB": 4.2, "AST": 5.4, "POS": "G", "TEAM": "Los Angeles Lakers"},
         "Anthony Davis": {"PTS": 25.3, "REB": 10.1, "AST": 3.6, "POS": "C", "TEAM": "Washington Wizards"},
@@ -608,7 +672,7 @@ def sync_live_nba_data():
             cached["fatigue_map"]
         )
 
-    print("🔄 Syncing V15 NBA Engine: 7/10 FG & 1Q Logs, Median L5 Min, Fresh-Injury Guard, & Pinnacle 10-Book...")
+    print("🔄 Syncing V16 NBA Engine: Live Pace, Home/Away & L10 Splits, 40/60 FG Form, & 10-Book 1Q...")
 
     # 1. Layer Official ESPN Season Averages on top of Fallback Dictionary
     espn_season_stats = fetch_espn_season_averages()
@@ -631,17 +695,17 @@ def sync_live_nba_data():
             "L10_AST": s_data["AST"],
             "L10_3PM": s_data["3PM"],
             "L10_PRA": s_data["PRA"],
+            "L5_PTS": s_data["PTS"],
+            "L5_REB": s_data["REB"],
+            "L5_AST": s_data["AST"],
+            "L5_3PM": s_data["3PM"],
+            "L5_PRA": s_data["PRA"],
             "SZN_MIN": s_data["MIN"],
             "L5_MIN": s_data["MIN"],
             "MEDIAN_L5_MIN": s_data["MIN"],
             "RECENT_GAMES": 0,
             "LAST_10D_GAMES": 0,
             "IS_STARTER": False,
-            "FG_PTS_L10": [],
-            "FG_REB_L10": [],
-            "FG_AST_L10": [],
-            "FG_3PM_L10": [],
-            "FG_PRA_L10": [],
             "Q1_PTS_L10": [],
             "Q1_REB_L10": [],
             "Q1_AST_L10": [],
@@ -661,7 +725,7 @@ def sync_live_nba_data():
         for k in ["PTS", "REB", "AST", "3PM", "PRA"]:
             p_data.setdefault(f"SZN_{k}", p_data[k])
             p_data.setdefault(f"L10_{k}", p_data[k])
-            p_data.setdefault(f"FG_{k}_L10", [])
+            p_data.setdefault(f"L5_{k}", p_data[k])
         for k in ["PTS", "REB", "AST"]:
             p_data.setdefault(f"Q1_{k}_L10", [])
 
@@ -681,6 +745,10 @@ def sync_live_nba_data():
         pass
 
     player_logs = {}
+    team_game_logs = {
+        t: {"off": [], "def": [], "home_off": [], "home_def": [], "away_off": [], "away_def": [], "pace": []}
+        for t in team_db
+    }
     opp_allowed_logs = {t: {"PTS": [], "REB": [], "AST": []} for t in team_db}
     opp_pos_allowed_logs = {
         t: {pos: {"PTS": [], "REB": [], "AST": []} for pos in ["G", "F", "C"]}
@@ -706,35 +774,60 @@ def sync_live_nba_data():
 
                 comps = sum_data.get("header", {}).get("competitions", [{}])[0].get("competitors", [])
                 if len(comps) == 2:
-                    t1_name = normalize_team_name(comps[0].get("team", {}).get("displayName", ""))
-                    t2_name = normalize_team_name(comps[1].get("team", {}).get("displayName", ""))
+                    home_c = next((c for c in comps if c.get("homeAway") == "home"), comps[0])
+                    away_c = next((c for c in comps if c.get("homeAway") == "away"), comps[1])
+                    h_t = normalize_team_name(home_c.get("team", {}).get("displayName", ""))
+                    a_t = normalize_team_name(away_c.get("team", {}).get("displayName", ""))
 
                     if days_ago <= 3:
-                        if t1_name in recent_days_played:
-                            recent_days_played[t1_name].append(days_ago)
-                        if t2_name in recent_days_played:
-                            recent_days_played[t2_name].append(days_ago)
+                        if h_t in recent_days_played:
+                            recent_days_played[h_t].append(days_ago)
+                        if a_t in recent_days_played:
+                            recent_days_played[a_t].append(days_ago)
 
-                    t1_lines = [float(x.get("displayValue") or x.get("value") or 0) for x in comps[0].get("linescores", [])]
-                    t2_lines = [float(x.get("displayValue") or x.get("value") or 0) for x in comps[1].get("linescores", [])]
+                    h_lines = [float(x.get("displayValue") or x.get("value") or 0) for x in home_c.get("linescores", [])]
+                    a_lines = [float(x.get("displayValue") or x.get("value") or 0) for x in away_c.get("linescores", [])]
+                    num_periods = max(len(h_lines), len(a_lines), 4)
+                    reg_scale = 48.0 / (48.0 + 5.0 * max(0, num_periods - 4))
 
-                    if days_ago == 1 and (len(t1_lines) > 4 or len(t2_lines) > 4):
-                        played_ot_yesterday.add(t1_name)
-                        played_ot_yesterday.add(t2_name)
+                    if days_ago == 1 and num_periods > 4:
+                        played_ot_yesterday.add(h_t)
+                        played_ot_yesterday.add(a_t)
 
-                    if len(t1_lines) >= 1 and len(t2_lines) >= 1 and t1_lines[0] > 0 and t2_lines[0] > 0 and t1_name in period_logs and t2_name in period_logs:
-                        period_logs[t1_name]["q1_off"].append(t1_lines[0])
-                        period_logs[t1_name]["q1_def"].append(t2_lines[0])
-                        period_logs[t2_name]["q1_off"].append(t2_lines[0])
-                        period_logs[t2_name]["q1_def"].append(t1_lines[0])
+                    # Live 48-min Normalized Home/Away & L10 Scoring + Live Possessions Pace
+                    h_score_raw = float(home_c.get("score") or sum(h_lines) or 0)
+                    a_score_raw = float(away_c.get("score") or sum(a_lines) or 0)
+                    if h_score_raw > 50 and a_score_raw > 50 and h_t in team_game_logs and a_t in team_game_logs:
+                        h_pts_48 = h_score_raw * reg_scale
+                        a_pts_48 = a_score_raw * reg_scale
+                        team_game_logs[h_t]["off"].append(h_pts_48)
+                        team_game_logs[h_t]["def"].append(a_pts_48)
+                        team_game_logs[h_t]["home_off"].append(h_pts_48)
+                        team_game_logs[h_t]["home_def"].append(a_pts_48)
 
-                    if len(t1_lines) >= 2 and len(t2_lines) >= 2 and (t1_lines[0] + t1_lines[1]) > 0 and (t2_lines[0] + t2_lines[1]) > 0 and t1_name in period_logs and t2_name in period_logs:
-                        h1_t1 = t1_lines[0] + t1_lines[1]
-                        h1_t2 = t2_lines[0] + t2_lines[1]
-                        period_logs[t1_name]["h1_off"].append(h1_t1)
-                        period_logs[t1_name]["h1_def"].append(h1_t2)
-                        period_logs[t2_name]["h1_off"].append(h1_t2)
-                        period_logs[t2_name]["h1_def"].append(h1_t1)
+                        team_game_logs[a_t]["off"].append(a_pts_48)
+                        team_game_logs[a_t]["def"].append(h_pts_48)
+                        team_game_logs[a_t]["away_off"].append(a_pts_48)
+                        team_game_logs[a_t]["away_def"].append(h_pts_48)
+
+                        game_pace_48 = extract_game_pace_48(sum_data, reg_scale)
+                        if game_pace_48 is not None:
+                            team_game_logs[h_t]["pace"].append(game_pace_48)
+                            team_game_logs[a_t]["pace"].append(game_pace_48)
+
+                    if len(h_lines) >= 1 and len(a_lines) >= 1 and h_lines[0] > 0 and a_lines[0] > 0 and h_t in period_logs and a_t in period_logs:
+                        period_logs[h_t]["q1_off"].append(h_lines[0])
+                        period_logs[h_t]["q1_def"].append(a_lines[0])
+                        period_logs[a_t]["q1_off"].append(a_lines[0])
+                        period_logs[a_t]["q1_def"].append(h_lines[0])
+
+                    if len(h_lines) >= 2 and len(a_lines) >= 2 and (h_lines[0] + h_lines[1]) > 0 and (a_lines[0] + a_lines[1]) > 0 and h_t in period_logs and a_t in period_logs:
+                        h1_h = h_lines[0] + h_lines[1]
+                        h1_a = a_lines[0] + a_lines[1]
+                        period_logs[h_t]["h1_off"].append(h1_h)
+                        period_logs[h_t]["h1_def"].append(h1_a)
+                        period_logs[a_t]["h1_off"].append(h1_a)
+                        period_logs[a_t]["h1_def"].append(h1_h)
 
                 p_boxes = sum_data.get("boxscore", {}).get("players", [])
                 if len(p_boxes) == 2:
@@ -856,7 +949,7 @@ def sync_live_nba_data():
             "tag": "/".join(tags) if tags else ""
         }
 
-    # Blend 50% Official Season Avg (SZN) + 50% Last 10 Games (L10) & Store Full-Game + 1Q L10 Logs
+    # V16 Player Form Weighting: 40% Official Season Avg (SZN) + 60% Last 10 Games (L10) + L5 Trend
     for norm_p, logs in player_logs.items():
         games_count = len(logs["PTS"])
         if games_count >= 1:
@@ -872,6 +965,13 @@ def sync_live_nba_data():
             l10_ast = float(np.mean(logs["AST"][-10:]))
             l10_3pm = float(np.mean(logs["3PM"][-10:]))
             l10_pra = float(np.mean(logs["PRA"][-10:]))
+
+            l5_pts = float(np.mean(logs["PTS"][-5:]))
+            l5_reb = float(np.mean(logs["REB"][-5:]))
+            l5_ast = float(np.mean(logs["AST"][-5:]))
+            l5_3pm = float(np.mean(logs["3PM"][-5:]))
+            l5_pra = float(np.mean(logs["PRA"][-5:]))
+
             l5_min = float(np.mean(logs["MIN"][-5:]))
             median_l5_min = float(np.median(logs["MIN"][-5:]))
 
@@ -903,11 +1003,11 @@ def sync_live_nba_data():
 
             pos_val = player_db.get(norm_p, {}).get("POS", logs.get("POS", "G"))
             player_db[norm_p] = {
-                "PTS": round(0.50 * szn_pts + 0.50 * l10_pts, 2),
-                "REB": round(0.50 * szn_reb + 0.50 * l10_reb, 2),
-                "AST": round(0.50 * szn_ast + 0.50 * l10_ast, 2),
-                "3PM": round(0.50 * szn_3pm + 0.50 * l10_3pm, 2),
-                "PRA": round(0.50 * szn_pra + 0.50 * l10_pra, 2),
+                "PTS": round(0.40 * szn_pts + 0.60 * l10_pts, 2),
+                "REB": round(0.40 * szn_reb + 0.60 * l10_reb, 2),
+                "AST": round(0.40 * szn_ast + 0.60 * l10_ast, 2),
+                "3PM": round(0.40 * szn_3pm + 0.60 * l10_3pm, 2),
+                "PRA": round(0.40 * szn_pra + 0.60 * l10_pra, 2),
                 "SZN_PTS": round(szn_pts, 1),
                 "SZN_REB": round(szn_reb, 1),
                 "SZN_AST": round(szn_ast, 1),
@@ -918,17 +1018,17 @@ def sync_live_nba_data():
                 "L10_AST": round(l10_ast, 1),
                 "L10_3PM": round(l10_3pm, 1),
                 "L10_PRA": round(l10_pra, 1),
+                "L5_PTS": round(l5_pts, 1),
+                "L5_REB": round(l5_reb, 1),
+                "L5_AST": round(l5_ast, 1),
+                "L5_3PM": round(l5_3pm, 1),
+                "L5_PRA": round(l5_pra, 1),
                 "SZN_MIN": round(szn_min, 1),
                 "L5_MIN": round(l5_min, 1),
                 "MEDIAN_L5_MIN": round(median_l5_min, 1),
                 "RECENT_GAMES": games_count,
                 "LAST_10D_GAMES": logs["LAST_10D_GAMES"],
                 "IS_STARTER": is_normal_starter,
-                "FG_PTS_L10": logs["PTS"][-10:],
-                "FG_REB_L10": logs["REB"][-10:],
-                "FG_AST_L10": logs["AST"][-10:],
-                "FG_3PM_L10": logs["3PM"][-10:],
-                "FG_PRA_L10": logs["PRA"][-10:],
                 "Q1_PTS_L10": logs["Q1_PTS"][-10:],
                 "Q1_REB_L10": logs["Q1_REB"][-10:],
                 "Q1_AST_L10": logs["Q1_AST"][-10:],
@@ -936,6 +1036,7 @@ def sync_live_nba_data():
                 "TEAM": logs["TEAM"]
             }
 
+    # Update Team DB with Live L10, Home/Away Splits & Live Pace
     for t_name, logs in opp_allowed_logs.items():
         if len(logs["REB"]) >= 2:
             team_db[t_name]["opp_reb"] = round(0.65 * float(np.mean(logs["REB"])) + 0.35 * team_db[t_name]["opp_reb"], 1)
@@ -943,6 +1044,40 @@ def sync_live_nba_data():
             team_db[t_name]["opp_ast"] = round(0.65 * float(np.mean(logs["AST"])) + 0.35 * team_db[t_name]["opp_ast"], 1)
         if len(logs["PTS"]) >= 2:
             team_db[t_name]["def"] = round(0.80 * float(np.mean(logs["PTS"])) + 0.20 * team_db[t_name]["def"], 1)
+
+    for t_name, g_logs in team_game_logs.items():
+        base_off = team_db[t_name]["off"]
+        base_def = team_db[t_name]["def"]
+
+        if len(g_logs["off"]) >= 3:
+            team_db[t_name]["l10_off"] = round(float(np.mean(g_logs["off"][-10:])), 1)
+            team_db[t_name]["l10_def"] = round(float(np.mean(g_logs["def"][-10:])), 1)
+        else:
+            team_db[t_name]["l10_off"] = base_off
+            team_db[t_name]["l10_def"] = base_def
+
+        # Sample-weighted Home/Away splits (prevents 1-game noise)
+        n_home = len(g_logs["home_off"])
+        if n_home >= 2:
+            w_h = min(0.75, n_home / 6.0)
+            team_db[t_name]["home_off"] = round(w_h * float(np.mean(g_logs["home_off"])) + (1.0 - w_h) * base_off, 1)
+            team_db[t_name]["home_def"] = round(w_h * float(np.mean(g_logs["home_def"])) + (1.0 - w_h) * base_def, 1)
+        else:
+            team_db[t_name]["home_off"] = base_off
+            team_db[t_name]["home_def"] = base_def
+
+        n_away = len(g_logs["away_off"])
+        if n_away >= 2:
+            w_a = min(0.75, n_away / 6.0)
+            team_db[t_name]["away_off"] = round(w_a * float(np.mean(g_logs["away_off"])) + (1.0 - w_a) * base_off, 1)
+            team_db[t_name]["away_def"] = round(w_a * float(np.mean(g_logs["away_def"])) + (1.0 - w_a) * base_def, 1)
+        else:
+            team_db[t_name]["away_off"] = base_off
+            team_db[t_name]["away_def"] = base_def
+
+        if len(g_logs["pace"]) >= 3:
+            live_pace = float(np.mean(g_logs["pace"][-10:]))
+            team_db[t_name]["pace"] = round(0.80 * live_pace + 0.20 * team_db[t_name]["pace"], 1)
 
     for t_name, p_logs in period_logs.items():
         if len(p_logs["q1_off"]) >= 2:
@@ -1005,13 +1140,17 @@ def sync_live_nba_data():
         "fatigue_map": fatigue_map
     })
 
-    # Startup Audit: Verify ESPN Play-by-Play 1Q REB & AST Parsing
+    # Startup Audits: Live Pace & 1Q Play-by-Play Verification
+    pace_sorted = sorted(team_db.items(), key=lambda x: x[1]["pace"], reverse=True)
+    fast_str = ", ".join(f"{get_abbr(t)} ({d['pace']:.1f})" for t, d in pace_sorted[:3])
+    slow_str = ", ".join(f"{get_abbr(t)} ({d['pace']:.1f})" for t, d in pace_sorted[-3:])
     starters_with_q1 = [(k, v) for k, v in player_db.items() if v.get("IS_STARTER") and len(v.get("Q1_REB_L10", [])) >= 7]
     top_q1_reb = sorted(starters_with_q1, key=lambda x: float(np.mean(x[1]["Q1_REB_L10"])), reverse=True)[:3]
     top_q1_ast = sorted(starters_with_q1, key=lambda x: float(np.mean(x[1]["Q1_AST_L10"])), reverse=True)[:3]
     reb_audit = ", ".join(f"{k.title()} ({np.mean(v['Q1_REB_L10']):.1f})" for k, v in top_q1_reb)
     ast_audit = ", ".join(f"{k.title()} ({np.mean(v['Q1_AST_L10']):.1f})" for k, v in top_q1_ast)
     print(f"✅ Synced {len(player_db)} players ({len(starters_with_q1)} starters with 7+ 1Q logs)!")
+    print(f"⏱️ Live Pace Audit — Fastest: [{fast_str}] | Slowest: [{slow_str}]")
     print(f"🔍 1Q PBP Audit — Top Q1 REB: [{reb_audit}] | Top Q1 AST: [{ast_audit}]")
     return team_db, player_db, opp_ranks, pos_ranks, pos_def_mults, fatigue_map
 
@@ -1088,7 +1227,7 @@ def calc_team_fatigue_penalty(team_name, is_home, fatigue_map):
 
 def calc_teammate_usage_boost(norm_p, team_name, player_pos, stat_code, player_db, confirmed_out, questionable_gtd):
     """
-    V15 Fresh-Injury Usage Boost:
+    Fresh-Injury Usage Boost:
     - Only counts teammates who played in the LAST 10 DAYS (LAST_10D_GAMES >= 1) so
       multi-week absences already baked into L10 logs are never double-counted.
     - Caps positive usage boost at +6% (1.06x).
@@ -1225,7 +1364,7 @@ def scan_all_fanduel_markets():
     }
 
     res = requests.get(url, params=params, timeout=10)
-    print(f"📊 V15 Sniper 10-Book Sync for {today_ct_str}! (Credits Remaining: {res.headers.get('x-requests-remaining')})")
+    print(f"📊 V16 Multi-Book Sync for {today_ct_str}! (Credits Remaining: {res.headers.get('x-requests-remaining')})")
     if res.status_code != 200:
         print(f"⚠️ Odds API Error ({res.status_code}): {res.text[:200]}")
         return
@@ -1270,18 +1409,29 @@ def scan_all_fanduel_markets():
         )
         game_total_candidates = []
 
-        h_stats = stats_db.get(home, {"off": avg_off, "def": avg_off, "pace": avg_pace, "opp_reb": avg_opp_reb, "opp_ast": avg_opp_ast, "q1_off": avg_q1_off, "q1_def": avg_q1_off, "h1_off": avg_h1_off, "h1_def": avg_h1_off})
-        a_stats = stats_db.get(away, {"off": avg_off, "def": avg_off, "pace": avg_pace, "opp_reb": avg_opp_reb, "opp_ast": avg_opp_ast, "q1_off": avg_q1_off, "q1_def": avg_q1_off, "h1_off": avg_h1_off, "h1_def": avg_h1_off})
+        default_team_row = {
+            "off": avg_off, "def": avg_off, "l10_off": avg_off, "l10_def": avg_off,
+            "home_off": avg_off, "home_def": avg_off, "away_off": avg_off, "away_def": avg_off,
+            "pace": avg_pace, "opp_reb": avg_opp_reb, "opp_ast": avg_opp_ast,
+            "q1_off": avg_q1_off, "q1_def": avg_q1_off, "h1_off": avg_h1_off, "h1_def": avg_h1_off
+        }
+        h_stats = stats_db.get(home, default_team_row)
+        a_stats = stats_db.get(away, default_team_row)
         h_ranks = opp_ranks.get(home, {"PTS": 15, "REB": 15, "AST": 15, "3PM": 15, "PRA": 15})
         a_ranks = opp_ranks.get(away, {"PTS": 15, "REB": 15, "AST": 15, "3PM": 15, "PRA": 15})
 
-        # 1. Pace Normalization
+        # 1. Live Pace Normalization & Blended Season (40%) + L10 (35%) + Home/Away Splits (25%)
         exp_pace = (h_stats["pace"] * a_stats["pace"]) / avg_pace
         team_avg_pace = (h_stats["pace"] + a_stats["pace"]) / 2.0
         pace_scaler = exp_pace / team_avg_pace
 
-        raw_h_pts = ((h_stats["off"] + a_stats["def"]) / 2.0) * pace_scaler
-        raw_a_pts = ((a_stats["off"] + h_stats["def"]) / 2.0) * pace_scaler
+        h_eff_off = 0.40 * h_stats["off"] + 0.35 * h_stats.get("l10_off", h_stats["off"]) + 0.25 * h_stats.get("home_off", h_stats["off"])
+        h_eff_def = 0.40 * h_stats["def"] + 0.35 * h_stats.get("l10_def", h_stats["def"]) + 0.25 * h_stats.get("home_def", h_stats["def"])
+        a_eff_off = 0.40 * a_stats["off"] + 0.35 * a_stats.get("l10_off", a_stats["off"]) + 0.25 * a_stats.get("away_off", a_stats["off"])
+        a_eff_def = 0.40 * a_stats["def"] + 0.35 * a_stats.get("l10_def", a_stats["def"]) + 0.25 * a_stats.get("away_def", a_stats["def"])
+
+        raw_h_pts = ((h_eff_off + a_eff_def) / 2.0) * pace_scaler
+        raw_a_pts = ((a_eff_off + h_eff_def) / 2.0) * pace_scaler
 
         # 2. Fresh-Injury Deduction & Schedule Fatigue
         h_inj_pen, h_gtd_stars = calc_team_injury_deduction(home, player_db, confirmed_out, questionable_gtd)
@@ -1291,18 +1441,18 @@ def scan_all_fanduel_markets():
         a_fat_pen = calc_team_fatigue_penalty(away, False, fatigue_map)
         hca_val = get_team_hca(home)
 
-        # 3. TRUE NET RATING DIFFERENTIAL
-        true_net_rtg_diff = ((h_stats["off"] - h_stats["def"]) - (a_stats["off"] - a_stats["def"])) * pace_scaler
+        # 3. TRUE NET RATING DIFFERENTIAL & V16 LIGHT-REGRESSION (10%) FULL-GAME TOTAL
+        true_net_rtg_diff = ((h_eff_off - h_eff_def) - (a_eff_off - a_eff_def)) * pace_scaler
         shrunk_eff_diff = true_net_rtg_diff * SPREAD_SHRINKAGE
         stat_model_margin = shrunk_eff_diff + hca_val - (h_inj_pen - a_inj_pen) - (h_fat_pen - a_fat_pen)
 
         raw_total = raw_h_pts + raw_a_pts
         league_avg_total = avg_off * 2.0
-        model_total = (0.75 * raw_total + 0.25 * league_avg_total) - (h_inj_pen + a_inj_pen) * 0.65 - (h_fat_pen + a_fat_pen) * 0.50
+        model_total = (0.90 * raw_total + 0.10 * league_avg_total) - (h_inj_pen + a_inj_pen) * 0.65 - (h_fat_pen + a_fat_pen) * 0.50
 
         fg_spread_abs = abs(stat_model_margin)
 
-        # --- A. FULL-GAME TOTALS & SPREADS (11.0% EV THRESHOLD) ---
+        # --- A. FULL-GAME TOTALS (V16: 10% REG + 6.5-PT CAP + 60/40 PINNACLE BLEND) & SPREADS ---
         if SCAN_FULL_GAME:
             for m in fd_markets:
                 if m["key"] == "totals":
@@ -1317,18 +1467,24 @@ def scan_all_fanduel_markets():
                             juice = int(over_o["price"]) if diff >= 0 else int(under_o["price"])
 
                             mkt_cons, mkt_prob = get_devigged_total_or_prop_consensus(other_books, "totals", pick_dir, line)
+
+                            # V16 6.5-Point Market Dislocation Cap (Blocks Blind Outlier Fades)
+                            anchor_total = mkt_cons if mkt_cons is not None else line
+                            if abs(model_total - anchor_total) > MAX_FG_TOTAL_DISLOCATION:
+                                continue
+
                             if mkt_cons is not None:
                                 if (pick_dir == "Over" and (mkt_cons - line) <= -1.5) or (pick_dir == "Under" and (mkt_cons - line) >= 1.5):
                                     continue
-                            if mkt_prob is not None and mkt_prob < 0.46:
+                            if mkt_prob is not None and mkt_prob < 0.49:
                                 continue
 
                             stat_win_prob = norm.cdf(abs(diff) / NBA_STD_DEV_TOTAL)
-                            win_prob = (0.75 * stat_win_prob + 0.25 * mkt_prob) if mkt_prob is not None else stat_win_prob
+                            win_prob = (0.60 * stat_win_prob + 0.40 * mkt_prob) if mkt_prob is not None else stat_win_prob
                             edge = win_prob - american_to_implied_prob(juice)
-                            if edge >= MIN_EDGE_TEAM_MARKETS:
+                            if edge >= MIN_EDGE_FG_TOTAL:
                                 ev_pct = edge * 100.0
-                                units = calc_kelly_units(win_prob, juice, max_units=2.0)
+                                units = calc_kelly_units(win_prob, juice, max_units=1.5)
                                 mkt_str = f" *(Mkt: {mkt_cons:.1f})*" if mkt_cons is not None else ""
                                 base_text = (
                                     f"**{a_ab} @ {h_ab} — {pick_dir} {line}** `({juice:+d})`\n"
@@ -1406,7 +1562,7 @@ def scan_all_fanduel_markets():
                                     tracked_bets.append({"bet_key": bet_key, "message_id": msg_id, "away": away, "home": home, "market": "FG_SPREAD", "pick_team": pick_team, "line": pick_line, "juice": juice, "units": units, "base_text": base_text, "status": "PENDING"})
                                     already_posted.add(bet_key)
 
-        # --- B. DEEP SCAN: 1H / 1Q, 7/10 SNIPER FG PROPS & 10-BOOK 1Q STARTER PROPS ---
+        # --- B. DEEP SCAN: 1Q STARTER PROPS (UNCHANGED FROM V15), 1H/1Q TOTALS, & V16 FG PROPS ---
         if (SCAN_HALVES_QUARTERS or SCAN_PLAYER_PROPS or SCAN_Q1_PLAYER_PROPS) and (deep_scans_done < MAX_DEEP_SCAN_GAMES_PER_RUN):
             extra_markets = []
             if SCAN_HALVES_QUARTERS:
@@ -1447,7 +1603,7 @@ def scan_all_fanduel_markets():
                 reg_q1_tot = PERIOD_TOTAL_SHRINKAGE * raw_q1_tot + (1.0 - PERIOD_TOTAL_SHRINKAGE) * (avg_q1_off * 2.0)
                 reg_h1_tot = PERIOD_TOTAL_SHRINKAGE * raw_h1_tot + (1.0 - PERIOD_TOTAL_SHRINKAGE) * (avg_h1_off * 2.0)
 
-                # --- B1. 1ST QUARTER STARTER PROPS (RUNS FIRST SO 1-PROP/PLAYER CAP PRIORITIZES 1Q) ---
+                # --- B1. 1ST QUARTER STARTER PROPS (UNCHANGED FROM V15) ---
                 if SCAN_Q1_PLAYER_PROPS:
                     q1_stat_map = {
                         "player_points_q1": "PTS",
@@ -1476,7 +1632,6 @@ def scan_all_fanduel_markets():
                                 entry["offers"].setdefault((b_key, line_val), {})[side_name] = price_val
                                 q1_offers_by_book[stat_code][b_key] = q1_offers_by_book[stat_code].get(b_key, 0) + 1
 
-                    # Collect per-player best 1Q prop so a player only gets 1 prop total across Q1 + FG
                     player_q1_candidates = {}
                     for (m_key, norm_p), entry in q1_board.items():
                         stat_code = q1_stat_map[m_key]
@@ -1607,7 +1762,6 @@ def scan_all_fanduel_markets():
                             "base_text": base_text,
                             "status": "PENDING"
                         }
-                        # Rank by hit rate then juice if player qualifies for multiple 1Q stats
                         player_q1_candidates.setdefault(norm_p, []).append((hit_rate, juice, stat_code, base_text, payload))
 
                     for norm_p, cand_list in player_q1_candidates.items():
@@ -1620,7 +1774,7 @@ def scan_all_fanduel_markets():
                             posted_players_today.add((today_ct_str, norm_p))
                             q1_filter_stats[best_stat]["posted"] += 1
 
-                # --- B2. PERIOD TOTALS / SPREADS & FULL-GAME 7/10 SNIPER PROPS ---
+                # --- B2. PERIOD TOTALS / SPREADS & V16 FULL-GAME PROPS (NO 7/10 GATE) ---
                 for m in fd_ev_markets:
                     m_key = m["key"]
 
@@ -1760,7 +1914,7 @@ def scan_all_fanduel_markets():
                                 continue
 
                             p_info = player_db[norm_p]
-                            # V15 Core Starter Gate: Verified normal starter averaging 24.0+ MPG
+                            # Core Starter Gate: Verified normal starter averaging 24.0+ MPG
                             szn_min = p_info.get("SZN_MIN", 0.0)
                             if not p_info.get("IS_STARTER", False) or szn_min < MIN_FG_PROP_AVG_MINUTES:
                                 continue
@@ -1786,15 +1940,12 @@ def scan_all_fanduel_markets():
                             elif stat_code == "PRA" and line < 14.5:
                                 continue
 
-                            fg_logs = p_info.get(f"FG_{stat_code}_L10", [])[-10:]
-                            if len(fg_logs) < MIN_FG_PROP_L10_HITS:
-                                continue
-
                             base_avg = p_info.get(stat_code, 0.0)
                             if base_avg <= 0.0:
                                 continue
                             szn_avg = p_info.get(f"SZN_{stat_code}", base_avg)
                             l10_avg = p_info.get(f"L10_{stat_code}", base_avg)
+                            l5_avg = p_info.get(f"L5_{stat_code}", l10_avg)
                             median_l5_min = p_info.get("MEDIAN_L5_MIN", szn_min)
                             p_pos = p_info.get("POS", "G")
 
@@ -1841,7 +1992,11 @@ def scan_all_fanduel_markets():
                                 elif fg_spread_abs >= 8.5:
                                     lambda_proj *= 0.96
 
-                            # --- 3. WIDENED REALISTIC VARIANCE (OVERDISPERSED NBA DISTRIBUTIONS) ---
+                            # --- 3. V16 22% MAX PROJECTION-GAP CAP (BLOCKS STALE ROLE/LINEUP TRAPS) ---
+                            if (abs(lambda_proj - line) / max(1.0, line)) > MAX_FG_PROP_GAP_PCT:
+                                continue
+
+                            # --- 4. WIDENED REALISTIC VARIANCE (OVERDISPERSED NBA DISTRIBUTIONS) ---
                             if stat_code == "PRA":
                                 std_val = 1.85 * np.sqrt(max(6.0, lambda_proj))
                                 prob_under = norm.cdf(line, loc=lambda_proj, scale=std_val)
@@ -1869,24 +2024,27 @@ def scan_all_fanduel_markets():
                             if juice < MAX_FG_PROP_JUICE:
                                 continue
 
-                            # --- 4. V15 STRICT 7/10 L10 HIT-RATE SNIPER GATE ---
-                            fg_hits = sum(1 for v in fg_logs if (v > line if pick_dir == "Over" else v < line))
-                            if fg_hits < MIN_FG_PROP_L10_HITS:
+                            # --- 5. V16 POSITIONAL DvP CONFIRMATION & L5 TREND CHECK (NO 7/10 GATE) ---
+                            if (pick_dir == "Over" and emp_pos_rk < 18) or (pick_dir == "Under" and emp_pos_rk > 13):
+                                continue
+                            if pick_dir == "Over" and l5_avg < line and l5_avg < (szn_avg * 0.90):
+                                continue
+                            if pick_dir == "Under" and l5_avg > line and l5_avg > (szn_avg * 1.10):
                                 continue
 
                             if pick_dir == "Over" and min_ratio <= 0.85 and usage_boost_mult < 1.03:
                                 continue
 
-                            # --- 5. SPOT-STARTER / FRESH STAR-ABSENCE / PRA-JUMP UNDER SAFEGUARD ---
+                            # --- 6. SPOT-STARTER / FRESH STAR-ABSENCE / PRA-JUMP UNDER SAFEGUARD ---
                             if is_spot_starter_under_trap(pick_dir, stat_code, line, szn_avg, l10_avg, szn_min, usage_boost_mult, missing_team_impact, missing_team_mins):
                                 continue
 
-                            # --- 6. PINNACLE-WEIGHTED 60/40 MARKET BLEND & JUICE GUARD ---
+                            # --- 7. PINNACLE-WEIGHTED 60/40 MARKET BLEND & >= 50% CONSENSUS GUARD ---
                             mkt_cons, mkt_prob = get_devigged_total_or_prop_consensus(other_ev_books, m_key, pick_dir, line, p_name)
                             if mkt_cons is not None:
                                 if (pick_dir == "Over" and (mkt_cons - line) <= -1.0) or (pick_dir == "Under" and (mkt_cons - line) >= 1.0):
                                     continue
-                            if mkt_prob is not None and mkt_prob < 0.49:
+                            if mkt_prob is not None and mkt_prob < 0.50:
                                 continue
 
                             win_prob = (0.60 * stat_win_prob + 0.40 * mkt_prob) if mkt_prob is not None else (0.85 * stat_win_prob)
@@ -1898,10 +2056,9 @@ def scan_all_fanduel_markets():
                                 ev_pct = edge * 100.0
                                 units = calc_kelly_units(win_prob, juice, max_units=MAX_FG_PROP_UNITS)
                                 usage_tag = " ⚡+Usage" if (usage_boost_mult >= 1.03 and pick_dir == "Over") else ""
-                                n_fg = len(fg_logs)
                                 base_text = (
                                     f"**{p_name} — {pick_dir} {line} {stat_code}** `({juice:+d})`\n"
-                                    f"🔥 **+{ev_pct:.1f}% EV** `({units:.1f}u)`  •  🎯 **L{n_fg}: {fg_hits}/{n_fg}**  •  📊 Proj: **{lambda_proj:.1f}** *(Szn: {szn_avg:.1f} | L10: {l10_avg:.1f})*\n"
+                                    f"🔥 **+{ev_pct:.1f}% EV** `({units:.1f}u)`  •  📊 Szn: **{szn_avg:.1f}** *(L10: {l10_avg:.1f} | Proj: {lambda_proj:.1f})*\n"
                                     f"{dot} vs {opp_ab_str} Def: **#{opp_def_rk}** *({p_pos}: #{emp_pos_rk})*{usage_tag}  •  🏀 {a_ab}@{h_ab} *({time_short})*\n"
                                     f"{DIVIDER}"
                                 )
@@ -1932,10 +2089,9 @@ def scan_all_fanduel_markets():
                 tracked_bets.append(best_payload)
                 already_posted.add(best_payload["bet_key"])
 
-    # --- D. POST TOP SNIPER FULL-GAME PROPS (1/PLAYER, 1/TEAM, MAX 5/DAY) ---
+    # --- D. POST TOP FULL-GAME PROPS (1/PLAYER, 1/TEAM, MAX 5/DAY) ---
     remaining_fg_slots = max(0, MAX_FG_PROPS_PER_DAY - posted_fg_props_today_count)
     if slate_fg_prop_candidates and remaining_fg_slots > 0:
-        # 1. Best single FG prop per player (excluding anyone who got a 1Q prop)
         best_by_player = {}
         for item in slate_fg_prop_candidates:
             edge, norm_p, p_team, base_text, payload = item
@@ -1944,14 +2100,12 @@ def scan_all_fanduel_markets():
             if norm_p not in best_by_player or edge > best_by_player[norm_p][0]:
                 best_by_player[norm_p] = item
 
-        # 2. Best single FG prop per team
         best_by_team = {}
         for item in best_by_player.values():
             edge, norm_p, p_team, base_text, payload = item
             if p_team not in best_by_team or edge > best_by_team[p_team][0]:
                 best_by_team[p_team] = item
 
-        # 3. Sort across entire slate by highest EV and cap at remaining daily slots
         top_fg_plays = sorted(best_by_team.values(), key=lambda x: x[0], reverse=True)[:remaining_fg_slots]
         for edge, norm_p, p_team, base_text, payload in top_fg_plays:
             msg_id = post_alert_to_discord(base_text)
@@ -2195,12 +2349,12 @@ def check_scores_and_grade_all_markets():
 
 if __name__ == "__main__":
     if "--grade-only" in sys.argv:
-        print("🏁 Running V15 Overnight Grading & Daily Recap Check...")
+        print("🏁 Running V16 Overnight Grading & Daily Recap Check...")
         check_scores_and_grade_all_markets()
         print("✅ Grading pass complete.")
         sys.exit(0)
 
-    print("🤖 LIVE NBA EV BOT (V15: 7/10 SNIPER + PINNACLE 10-BOOK + 1Q AUDIT) IS LIVE!")
+    print("🤖 LIVE NBA EV BOT (V16: LIVE SPLITS/PACE + DVP/FORM FG PROPS + V15 1Q) IS LIVE!")
     start_ts = time.time()
     last_scan = 0
     while (time.time() - start_ts) < MAX_RUNTIME_SECONDS:

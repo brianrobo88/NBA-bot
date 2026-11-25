@@ -2,21 +2,32 @@ name: NBA EV Bot
 
 on:
   schedule:
-    # Main evening scan & live grading (4:45 PM CST = 22:45 UTC)
-    - cron: '45 22 * * *'
-    # Overnight West Coast grading & Daily Recap (1:30 AM CST = 07:30 UTC)
-    - cron: '30 7 * * *'
-    # Morning backup grading check (6:00 AM CST = 12:00 UTC)
-    - cron: '0 12 * * *'
+    # Smart Matinee Check (10:17 AM CST = 16:17 UTC) — exits in 3s if no game <= 5:30 PM CST
+    - cron: '17 16 * * *'
+    # Main Evening Shift (4:17 PM CST = 22:17 UTC) — runs 5.5h with 90m pre-tip scan window
+    - cron: '17 22 * * *'
+    # Overnight West Coast grading & Daily Recap (1:23 AM CST = 07:23 UTC)
+    - cron: '23 7 * * *'
+    # Morning backup grading check (6:13 AM CST = 12:13 UTC)
+    - cron: '13 12 * * *'
   workflow_dispatch:
     inputs:
-      grade_only:
-        description: 'Run quick grading & recap only (true/false)'
-        required: false
-        default: 'false'
+      mode:
+        description: 'Shift mode to run manually'
+        required: true
+        default: 'evening'
+        type: choice
+        options:
+          - evening
+          - matinee
+          - grade_only
 
 permissions:
   contents: write
+
+concurrency:
+  group: nba-ev-bot
+  cancel-in-progress: false
 
 jobs:
   run-bot:
@@ -38,8 +49,10 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           THE_ODDS_API_KEY: ${{ secrets.THE_ODDS_API_KEY }}
         run: |
-          if [ "${{ github.event.schedule }}" = "30 7 * * *" ] || [ "${{ github.event.schedule }}" = "0 12 * * *" ] || [ "${{ github.event.inputs.grade_only }}" = "true" ]; then
+          if [ "${{ github.event.schedule }}" = "23 7 * * *" ] || [ "${{ github.event.schedule }}" = "13 12 * * *" ] || [ "${{ github.event.inputs.mode }}" = "grade_only" ]; then
             python Bot.py --grade-only
+          elif [ "${{ github.event.schedule }}" = "17 16 * * *" ] || [ "${{ github.event.inputs.mode }}" = "matinee" ]; then
+            python Bot.py --matinee
           else
             python Bot.py
           fi
@@ -52,6 +65,8 @@ jobs:
           for f in tracked_all_markets.json daily_recaps_posted.json; do
             if [ -f "$f" ]; then git add -f "$f"; fi
           done
-          git diff --staged --quiet || git commit -m "chore: update tracked bets and recap state"
-          git pull --rebase origin ${{ github.ref_name }} || true
-          git push
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: update tracked bets and recap state"
+            git pull --rebase origin ${{ github.ref_name }} || true
+            git push
+          fi

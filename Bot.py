@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 import pytz
 
 # ==========================================
-# 1. CREDENTIALS & V16 CONFIGURATION
+# 1. CREDENTIALS & V16.1 CONFIGURATION
 # ==========================================
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
 
@@ -28,6 +28,11 @@ SCAN_HALVES_QUARTERS = True   # 1st Half & 1st Quarter Spreads & Totals
 SCAN_PLAYER_PROPS = True      # Core Starters Only: PTS, REB, AST, PRA, 3PM (Matchup + Form)
 SCAN_PRA_AND_3PM = True       # Scans PRA & 3PM alongside PTS/REB/AST
 SCAN_Q1_PLAYER_PROPS = True   # 1st Quarter Starter Props: PTS, REB, AST (7/10 L10 Filter)
+
+# Pre-Tip Window & Matinee Scheduling Controls
+PRE_TIP_SCAN_WINDOW_MINUTES = 90 # Only scans & bets games within 90 mins of tip-off
+MATINEE_CUTOFF_HOUR_CT = 17.5    # Games tipping at/before 5:30 PM CST activate Matinee Shift
+MATINEE_STOP_HOUR_CT = 16.08     # Matinee Shift exits cleanly by 4:05 PM CST before Evening Shift
 
 # Calibrated EV, Dislocation, Hit-Rate, Juice & Volume Controls
 MIN_EDGE_TEAM_MARKETS = 0.110 # 11.0% EV for FG Spreads & 1Q/1H Markets (75/25 blend)
@@ -80,7 +85,7 @@ RECAP_POSTED_FILE = "daily_recaps_posted.json"
 CACHE_SCHEMA_VERSION = "v16_live_splits_pace_dvp_fg_props"
 
 SCORE_CHECK_SECONDS = 300     # Checks ESPN scores every 5 mins (FREE)
-FANDUEL_SCAN_SECONDS = 2700   # Rescans lines & injury reports every 45 mins until tip-off
+FANDUEL_SCAN_SECONDS = 1800   # Rescans every 30 mins (guarantees 2-3 passes inside 90-min window)
 MAX_RUNTIME_SECONDS = 19800   # Clean exit at 5h 30m so GitHub Actions commits JSON state before 6h kill
 
 NBA_STD_DEV_TOTAL = 16.0
@@ -213,6 +218,73 @@ def calc_kelly_units(win_prob, odds_val, max_units=2.0):
     except:
         return min(1.0, max_units)
 
+def fetch_today_espn_schedule_ct():
+    """
+    Fetches today's NBA slate from ESPN's free scoreboard.
+    Returns list of dicts: {short_name, dt_utc, dt_ct, state} or None on request error.
+    """
+    central_tz = pytz.timezone("America/Chicago")
+    now_ct = datetime.now(timezone.utc).astimezone(central_tz)
+    today_espn = now_ct.strftime("%Y%m%d")
+    today_iso = now_ct.strftime("%Y-%m-%d")
+    url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={today_espn}"
+    try:
+        res = requests.get(url, timeout=10)
+        if res.status_code != 200:
+            return None
+        data = res.json()
+        games = []
+        for ev in data.get("events", []):
+            date_raw = ev.get("date", "")
+            if not date_raw:
+                continue
+            dt_utc = datetime.fromisoformat(date_raw.replace("Z", "+00:00"))
+            dt_ct = dt_utc.astimezone(central_tz)
+            if dt_ct.strftime("%Y-%m-%d") != today_iso:
+                continue
+            state = ev.get("status", {}).get("type", {}).get("state", "pre")
+            games.append({
+                "short_name": ev.get("shortName", "NBA Game"),
+                "dt_utc": dt_utc,
+                "dt_ct": dt_ct,
+                "state": state
+            })
+        return games
+    except:
+        return None
+
+def has_early_games_today():
+    """Returns (has_early, early_labels) for any game tipping at or before 5:30 PM CST."""
+    games = fetch_today_espn_schedule_ct()
+    if games is None:
+        return False, []
+    early_labels = []
+    for g in games:
+        tip_hour_ct = g["dt_ct"].hour + (g["dt_ct"].minute / 60.0)
+        if tip_hour_ct <= MATINEE_CUTOFF_HOUR_CT and g["state"] != "post":
+            t_str = g["dt_ct"].strftime("%-I:%M%p").lower()
+            early_labels.append(f"{g['short_name']} ({t_str})")
+    return bool(early_labels), early_labels
+
+def has_game_in_pre_tip_window(buffer_minutes=15):
+    """
+    Uses ESPN's free schedule to check whether any unstarted game today is within
+    (PRE_TIP_SCAN_WINDOW_MINUTES + buffer_minutes) of tip-off before spending Odds API credits.
+    Fails open (returns True) if ESPN is unreachable.
+    """
+    games = fetch_today_espn_schedule_ct()
+    if games is None:
+        return True
+    now_utc = datetime.now(timezone.utc)
+    max_window = PRE_TIP_SCAN_WINDOW_MINUTES + buffer_minutes
+    for g in games:
+        if g["state"] != "pre":
+            continue
+        mins_until_tip = (g["dt_utc"] - now_utc).total_seconds() / 60.0
+        if 0 < mins_until_tip <= max_window:
+            return True
+    return False
+
 def extract_fanduel_and_consensus(bookmakers_list):
     """Separates FanDuel markets from other major books to build de-vigged consensus."""
     fd_markets = []
@@ -337,7 +409,6 @@ def extract_game_pace_48(sum_data, reg_scale):
     if len(poss_list) == 2:
         return float(np.clip(np.mean(poss_list) * reg_scale, 88.0, 112.0))
 
-    # Fallback: sum player boxscores per team
     poss_list = []
     for tb in sum_data.get("boxscore", {}).get("players", []):
         stat_blk = (tb.get("statistics") or [{}])[0]
@@ -672,7 +743,7 @@ def sync_live_nba_data():
             cached["fatigue_map"]
         )
 
-    print("🔄 Syncing V16 NBA Engine: Live Pace, Home/Away & L10 Splits, 40/60 FG Form, & 10-Book 1Q...")
+    print("🔄 Syncing V16.1 NBA Engine: Live Pace, Home/Away & L10 Splits, 40/60 FG Form, & 10-Book 1Q...")
 
     # 1. Layer Official ESPN Season Averages on top of Fallback Dictionary
     espn_season_stats = fetch_espn_season_averages()
@@ -1056,7 +1127,6 @@ def sync_live_nba_data():
             team_db[t_name]["l10_off"] = base_off
             team_db[t_name]["l10_def"] = base_def
 
-        # Sample-weighted Home/Away splits (prevents 1-game noise)
         n_home = len(g_logs["home_off"])
         if n_home >= 2:
             w_h = min(0.75, n_home / 6.0)
@@ -1140,7 +1210,6 @@ def sync_live_nba_data():
         "fatigue_map": fatigue_map
     })
 
-    # Startup Audits: Live Pace & 1Q Play-by-Play Verification
     pace_sorted = sorted(team_db.items(), key=lambda x: x[1]["pace"], reverse=True)
     fast_str = ", ".join(f"{get_abbr(t)} ({d['pace']:.1f})" for t, d in pace_sorted[:3])
     slow_str = ", ".join(f"{get_abbr(t)} ({d['pace']:.1f})" for t, d in pace_sorted[-3:])
@@ -1321,6 +1390,13 @@ def post_alert_to_discord(base_text, prefix="⏳ "):
     return None
 
 def scan_all_fanduel_markets():
+    # Free ESPN check first so idle hours spend 0 Odds API credits
+    if not has_game_in_pre_tip_window():
+        central_tz = pytz.timezone("America/Chicago")
+        now_str = datetime.now(timezone.utc).astimezone(central_tz).strftime("%-I:%M %p CST")
+        print(f"⏸️ [{now_str}] No games within {PRE_TIP_SCAN_WINDOW_MINUTES}-min pre-tip window — skipping Odds API call (0 credits used).")
+        return
+
     tracked_bets = load_json(TRACKER_FILE, [])
     already_posted = {b["bet_key"] for b in tracked_bets}
     prop_excluded, confirmed_out, questionable_gtd = fetch_injured_players()
@@ -1337,7 +1413,7 @@ def scan_all_fanduel_markets():
     now_utc = datetime.now(timezone.utc)
     today_ct_str = now_utc.astimezone(central_tz).strftime("%Y-%m-%d")
 
-    # Cross-Market Exposure Trackers for Today (Persisted Across 45-Min Rescans)
+    # Cross-Market Exposure Trackers for Today (Persisted Across Rescans & Shifts)
     posted_players_today = set()   # (date_str, norm_p) across BOTH FG & 1Q props
     posted_fg_teams_today = set()  # (date_str, team_name) max 1 FG prop per team
     posted_fg_props_today_count = 0
@@ -1364,15 +1440,16 @@ def scan_all_fanduel_markets():
     }
 
     res = requests.get(url, params=params, timeout=10)
-    print(f"📊 V16 Multi-Book Sync for {today_ct_str}! (Credits Remaining: {res.headers.get('x-requests-remaining')})")
+    print(f"📊 V16.1 Pre-Tip ({PRE_TIP_SCAN_WINDOW_MINUTES}m) Sync for {today_ct_str}! (Credits Remaining: {res.headers.get('x-requests-remaining')})")
     if res.status_code != 200:
         print(f"⚠️ Odds API Error ({res.status_code}): {res.text[:200]}")
         return
 
     events = res.json()
     deep_scans_done = 0
+    games_in_window = 0
 
-    # Collects FG prop candidates across the entire slate for per-player, per-team, and top-5 daily caps
+    # Collects FG prop candidates across games currently in the 90-min pre-tip window
     slate_fg_prop_candidates = []
 
     # Diagnostic counters for 1Q props across all 10 books
@@ -1387,13 +1464,15 @@ def scan_all_fanduel_markets():
         if not fd_markets:
             continue
         dt_utc = datetime.fromisoformat(g["commence_time"].replace("Z", "+00:00"))
-        if dt_utc <= now_utc:
+        mins_until_tip = (dt_utc - now_utc).total_seconds() / 60.0
+        if mins_until_tip <= 0 or mins_until_tip > PRE_TIP_SCAN_WINDOW_MINUTES:
             continue
 
         date_str = dt_utc.astimezone(central_tz).strftime("%Y-%m-%d")
         if date_str != today_ct_str:
             continue
 
+        games_in_window += 1
         event_id = g["id"]
         home = normalize_team_name(g["home_team"])
         away = normalize_team_name(g["away_team"])
@@ -1452,7 +1531,7 @@ def scan_all_fanduel_markets():
 
         fg_spread_abs = abs(stat_model_margin)
 
-        # --- A. FULL-GAME TOTALS (V16: 10% REG + 6.5-PT CAP + 60/40 PINNACLE BLEND) & SPREADS ---
+        # --- A. FULL-GAME TOTALS (10% REG + 6.5-PT CAP + 60/40 PINNACLE BLEND) & SPREADS ---
         if SCAN_FULL_GAME:
             for m in fd_markets:
                 if m["key"] == "totals":
@@ -1468,7 +1547,6 @@ def scan_all_fanduel_markets():
 
                             mkt_cons, mkt_prob = get_devigged_total_or_prop_consensus(other_books, "totals", pick_dir, line)
 
-                            # V16 6.5-Point Market Dislocation Cap (Blocks Blind Outlier Fades)
                             anchor_total = mkt_cons if mkt_cons is not None else line
                             if abs(model_total - anchor_total) > MAX_FG_TOTAL_DISLOCATION:
                                 continue
@@ -1562,7 +1640,7 @@ def scan_all_fanduel_markets():
                                     tracked_bets.append({"bet_key": bet_key, "message_id": msg_id, "away": away, "home": home, "market": "FG_SPREAD", "pick_team": pick_team, "line": pick_line, "juice": juice, "units": units, "base_text": base_text, "status": "PENDING"})
                                     already_posted.add(bet_key)
 
-        # --- B. DEEP SCAN: 1Q STARTER PROPS (UNCHANGED FROM V15), 1H/1Q TOTALS, & V16 FG PROPS ---
+        # --- B. DEEP SCAN: 1Q STARTER PROPS (UNCHANGED), 1H/1Q TOTALS, & V16 FG PROPS ---
         if (SCAN_HALVES_QUARTERS or SCAN_PLAYER_PROPS or SCAN_Q1_PLAYER_PROPS) and (deep_scans_done < MAX_DEEP_SCAN_GAMES_PER_RUN):
             extra_markets = []
             if SCAN_HALVES_QUARTERS:
@@ -1603,7 +1681,7 @@ def scan_all_fanduel_markets():
                 reg_q1_tot = PERIOD_TOTAL_SHRINKAGE * raw_q1_tot + (1.0 - PERIOD_TOTAL_SHRINKAGE) * (avg_q1_off * 2.0)
                 reg_h1_tot = PERIOD_TOTAL_SHRINKAGE * raw_h1_tot + (1.0 - PERIOD_TOTAL_SHRINKAGE) * (avg_h1_off * 2.0)
 
-                # --- B1. 1ST QUARTER STARTER PROPS (UNCHANGED FROM V15) ---
+                # --- B1. 1ST QUARTER STARTER PROPS (UNCHANGED FROM V15/V16) ---
                 if SCAN_Q1_PLAYER_PROPS:
                     q1_stat_map = {
                         "player_points_q1": "PTS",
@@ -1992,7 +2070,7 @@ def scan_all_fanduel_markets():
                                 elif fg_spread_abs >= 8.5:
                                     lambda_proj *= 0.96
 
-                            # --- 3. V16 22% MAX PROJECTION-GAP CAP (BLOCKS STALE ROLE/LINEUP TRAPS) ---
+                            # --- 3. 22% MAX PROJECTION-GAP CAP (BLOCKS STALE ROLE/LINEUP TRAPS) ---
                             if (abs(lambda_proj - line) / max(1.0, line)) > MAX_FG_PROP_GAP_PCT:
                                 continue
 
@@ -2020,11 +2098,10 @@ def scan_all_fanduel_markets():
                             else:
                                 pick_dir, stat_win_prob, juice = "Under", prob_under, int(sides["Under"]["price"])
 
-                            # Block heavy juice (-141 or worse)
                             if juice < MAX_FG_PROP_JUICE:
                                 continue
 
-                            # --- 5. V16 POSITIONAL DvP CONFIRMATION & L5 TREND CHECK (NO 7/10 GATE) ---
+                            # --- 5. POSITIONAL DvP CONFIRMATION & L5 TREND CHECK (NO 7/10 GATE) ---
                             if (pick_dir == "Over" and emp_pos_rk < 18) or (pick_dir == "Under" and emp_pos_rk > 13):
                                 continue
                             if pick_dir == "Over" and l5_avg < line and l5_avg < (szn_avg * 0.90):
@@ -2116,16 +2193,17 @@ def scan_all_fanduel_markets():
                 posted_players_today.add((today_ct_str, norm_p))
                 posted_fg_teams_today.add((today_ct_str, p_team))
 
-    # Print 1Q Diagnostic Summary to GitHub Actions Logs
-    for stat_k in ["PTS", "REB", "AST"]:
-        books_str = ", ".join(f"{BOOK_LABELS.get(bk, bk)}:{cnt}" for bk, cnt in sorted(q1_offers_by_book[stat_k].items())) or "None"
-        st = q1_filter_stats[stat_k]
-        print(
-            f"🎯 1Q {stat_k} Audit — Books: [{books_str}] | "
-            f"Players:{st['raw_players']} -> Posted:{st['posted']} "
-            f"(NoStart:{st['not_starter']}, LowLogs:{st['low_logs']}, <7/10:{st['lt_7_hits']}, "
-            f"Juice<-165:{st['heavy_juice']}, Red:{st['red_dot']}, Cons/Inj:{st['cons_or_inj']})"
-        )
+    print(f"⏱️ Scanned {games_in_window} game(s) inside the {PRE_TIP_SCAN_WINDOW_MINUTES}-min pre-tip window.")
+    if games_in_window > 0:
+        for stat_k in ["PTS", "REB", "AST"]:
+            books_str = ", ".join(f"{BOOK_LABELS.get(bk, bk)}:{cnt}" for bk, cnt in sorted(q1_offers_by_book[stat_k].items())) or "None"
+            st = q1_filter_stats[stat_k]
+            print(
+                f"🎯 1Q {stat_k} Audit — Books: [{books_str}] | "
+                f"Players:{st['raw_players']} -> Posted:{st['posted']} "
+                f"(NoStart:{st['not_starter']}, LowLogs:{st['low_logs']}, <7/10:{st['lt_7_hits']}, "
+                f"Juice<-165:{st['heavy_juice']}, Red:{st['red_dot']}, Cons/Inj:{st['cons_or_inj']})"
+            )
 
     save_json(TRACKER_FILE, tracked_bets)
 
@@ -2349,15 +2427,32 @@ def check_scores_and_grade_all_markets():
 
 if __name__ == "__main__":
     if "--grade-only" in sys.argv:
-        print("🏁 Running V16 Overnight Grading & Daily Recap Check...")
+        print("🏁 Running V16.1 Overnight Grading & Daily Recap Check...")
         check_scores_and_grade_all_markets()
         print("✅ Grading pass complete.")
         sys.exit(0)
 
-    print("🤖 LIVE NBA EV BOT (V16: LIVE SPLITS/PACE + DVP/FORM FG PROPS + V15 1Q) IS LIVE!")
+    is_matinee_mode = ("--matinee" in sys.argv)
+    if is_matinee_mode:
+        has_early, early_list = has_early_games_today()
+        if not has_early:
+            print("☀️ No matinee games tipping at/before 5:30 PM CST today — exiting cleanly (0 credits used).")
+            sys.exit(0)
+        print(f"🌅 MATINEE SHIFT ACTIVE (90m pre-tip window)! Early games detected: {', '.join(early_list)}")
+    else:
+        print(f"🤖 LIVE NBA EV BOT (V16.1: {PRE_TIP_SCAN_WINDOW_MINUTES}m PRE-TIP WINDOW + V16 ENGINE) IS LIVE!")
+
+    central_tz = pytz.timezone("America/Chicago")
     start_ts = time.time()
     last_scan = 0
+
     while (time.time() - start_ts) < MAX_RUNTIME_SECONDS:
+        if is_matinee_mode:
+            now_ct = datetime.now(timezone.utc).astimezone(central_tz)
+            if (now_ct.hour + now_ct.minute / 60.0) >= MATINEE_STOP_HOUR_CT:
+                print("⏰ Matinee shift reached 4:05 PM CST handoff window — saving state for Evening Shift...")
+                break
+
         now_ts = time.time()
         if (now_ts - last_scan) >= FANDUEL_SCAN_SECONDS:
             scan_all_fanduel_markets()
@@ -2365,5 +2460,5 @@ if __name__ == "__main__":
         check_scores_and_grade_all_markets()
         time.sleep(SCORE_CHECK_SECONDS)
 
-    print("⏰ Reached 5.5h clean-exit window. Running final grading check before saving state...")
+    print("⏰ Reached clean-exit window. Running final grading check before saving state...")
     check_scores_and_grade_all_markets()

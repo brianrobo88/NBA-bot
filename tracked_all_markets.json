@@ -179,7 +179,8 @@
     "units": 0.7,
     "dot": "\ud83d\udfe2",
     "base_text": "**Aaron Gordon \u2014 Under 21.5 PRA** `(-115)`\n\ud83d\udd25 **+6.8% EV** `(0.7u)`  \u2022  \ud83d\udcca Szn: **19.2** *(L10: 17.9 | Proj: 18.3)*\n\ud83d\udfe2 vs DAL Def: **#10** *(F: #5)*  \u2022  \ud83c\udfc0 DAL@DEN *(9:10pm)*\n\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af",
-    "status": "PENDING",
-    "message_id": "1574984107174264903"
+    "status": "GRADED",
+    "message_id": "1574984107174264903",
+    "result": "WIN"
   }
 ]

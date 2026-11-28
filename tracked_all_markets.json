@@ -958,8 +958,9 @@
     "juice": -110,
     "units": 0.6,
     "base_text": "**GSW @ POR \u2014 Over 216.5** `(-110)`\n\ud83d\udd25 **+5.4% EV** `(0.6u)`  \u2022  \ud83d\udcca Proj: **221.8** *(Mkt: 216.5)*\n\ud83d\udee1\ufe0f Def: GSW #7 vs POR #8  \u2022  \ud83d\udd52 8:40pm\n\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af\u23af",
-    "status": "PENDING",
-    "message_id": "1576049155816685796"
+    "status": "GRADED",
+    "message_id": "1576049155816685796",
+    "result": "LOSS"
   },
   {
     "bet_key": "2026-11-27_New Orleans Pelicans_vs_Los Angeles Clippers_rui hachimura_Q1_PTS",
